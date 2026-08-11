@@ -2,9 +2,11 @@
 
 > *“The signal went dark at 03:17. We sent you up.”*
 
-A **PSX-style survival exploration** game built as a tribute to PlayStation-era horror — 320×240, vertex snap, affine texture warp, 15-bit dither, CRT scanlines, and all the beautiful imprecision of the GTE.
+A **PSX-style survival exploration** game — 320×240, GTE snap, affine warp, 15-bit dither, CRT, snowfall. Now with **key → fuse → fuel → generator → tapes → door → 147.7 MHz tuning**, save/load, map, batteries, interior, touch + gamepad + `prefers-reduced-motion`.
 
-You are a rescue tech sent to **Hollow Peak Observatory** after it goes silent in a blizzard. Recover 4 lost crew tapes, avoid the **Listener** in the fog, and restore the transmitter.
+You are a rescue tech sent to **Hollow Peak Observatory** after it goes silent. Restore power, find the crew, and broadcast before it finds you. The Listener hunts on sight *and* sound — light and sprinting give you away, but the flashlight (now battery-drained) stuns at <4.2 m.
+
+**Live:** `https://Frostbite1536.github.io/hollow-peak-psx/` (GitHub Pages, auto-deploy on push to `main`)
 
 ---
 
@@ -19,15 +21,19 @@ npm run preview
 
 Or open `dist/index.html` after build.
 
-### 🎮 Controls
+### 🎮 Controls (KB/M + Gamepad + Touch)
 
 | Input | Action |
 |-------|--------|
 | **W / S** | Move forward / back (tank) |
 | **A / D** | Turn left / right |
-| **Shift** | Run (drains stamina — it hears you) |
-| **E** | Interact: pick up tape / activate transmitter |
-| **F** | Toggle flashlight (stuns Listener at <4m, but makes you visible) |
+| **Shift / RUN btn** | Run (drains stamina — louder) |
+| **E / TAP E** | Interact: key/fuse/fuel/tapes/generator/door/transmitter |
+| **F / ☀** | Toggle flashlight (battery drains 0.028/s, stuns <4.2 m, 0.82 dot, 1.1s) |
+| **Tab / Q / MAP btn** | Toggle 190×190 site map (shows you, Listener, all items) |
+| **M** | Mute |
+| **A/D in tuning** | Tune radio 100→160 MHz to 147.7 |
+| Touch | On-screen D-pad + RUN/E/☀/MAP |
 | **Esc / P** | Pause |
 | **M** | Mute |
 
