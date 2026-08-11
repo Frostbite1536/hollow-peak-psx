@@ -96,9 +96,9 @@ const crtMat = new THREE.ShaderMaterial({
   uniforms: {
     tDiffuse: { value: rt.texture },
     uTime: { value: 0 },
-    uDistortion: { value: 0.18 },
-    uScanline: { value: 0.62 },
-    uChroma: { value: 0.0014 }
+    uDistortion: { value: 0.12 },
+    uScanline: { value: 0.38 },
+    uChroma: { value: 0.0010 }
   },
   vertexShader: CRTVertex,
   fragmentShader: CRTFragment,
@@ -110,7 +110,7 @@ crtScene.add(crtQuad)
 
 // PSX materials collection
 const psxMaterials: THREE.Material[] = []
-const { tapes, colliders, dishGroup, towerLight, txGroup, doorGroup, genGroup, keyGroup, fuseGroup, fuelGroup, batteries, interiorGroup, snowfall, snowGeo, snowPos, snowVel } = createWorld(scene, psxMaterials)
+const { tapes, colliders, dishGroup, towerLight, txGroup, doorGroup, genGroup, keyGroup, fuseGroup, fuelGroup, batteries, interiorGroup, interiorSwitches, snowfall, snowGeo, snowPos, snowVel } = createWorld(scene, psxMaterials)
 
 // Player
 const player = {
@@ -198,34 +198,44 @@ let invuln = 0
 let wonTimer = 0
 let showMap = false
 let objectivePulse = 0
+let switchesOn = [false,false,false]
+let lastHeardPos: THREE.Vector3 | null = null
+let stillTimer = 0 // hiding mechanic
 const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
 let difficulty: 'easy'|'normal'|'hard' = (localStorage.getItem('hp_difficulty') as any) || 'normal'
 let autoSaveTimer = 0
 
 function saveGame(){
   try{
-    const data = { tapesCollected, hasKey, hasFuse, hasFuel, generatorRepaired, doorUnlocked, batteriesCollected, flashlightBattery, radioFreq, playerPos: player.pos.toArray(), playerYaw: player.yaw, tapes: tapes.map(t=>t.collected), batteries: batteries.map(b=>!b.visible) }
+    const data = { tapesCollected, hasKey, hasFuse, hasFuel, generatorRepaired, doorUnlocked, batteriesCollected, flashlightBattery, radioFreq, switchesOn, playerPos: player.pos.toArray(), playerYaw: player.yaw, tapes: tapes.map(t=>t.collected), batteries: batteries.map(b=>!b.visible) }
+    localStorage.setItem('hp_save_v3', JSON.stringify(data))
     localStorage.setItem('hp_save_v2', JSON.stringify(data))
   }catch{}
 }
 function loadGame():boolean{
   try{
-    const raw = localStorage.getItem('hp_save_v2')
+    const raw = localStorage.getItem('hp_save_v3') || localStorage.getItem('hp_save_v2')
     if(!raw) return false
     const d = JSON.parse(raw)
     tapesCollected = d.tapesCollected||0; hasKey=!!d.hasKey; hasFuse=!!d.hasFuse; hasFuel=!!d.hasFuel; generatorRepaired=!!d.generatorRepaired; doorUnlocked=!!d.doorUnlocked; batteriesCollected=d.batteriesCollected||0; flashlightBattery=d.flashlightBattery||1; radioFreq=d.radioFreq||100
+    if(d.switchesOn) switchesOn = d.switchesOn.slice(0,3)
     if(d.playerPos) player.pos.fromArray(d.playerPos); if(d.playerYaw) player.yaw=d.playerYaw
     if(d.tapes) tapes.forEach((t,i)=>{ t.collected=!!d.tapes[i]; t.mesh.visible=!t.collected; if(t.collected) tapesCollected++ })
-    // fix double count - we already set tapesCollected, but need accurate
     tapesCollected = tapes.filter(t=>t.collected).length
     if(d.batteries) batteries.forEach((b,i)=>{ if(d.batteries[i]) b.visible=false })
     keyGroup.visible=!hasKey; fuseGroup.visible=!hasFuse; fuelGroup.visible=!hasFuel
     if(doorUnlocked) doorGroup.visible=false
     if(generatorRepaired){ const gl = genGroup.userData.light as THREE.Mesh; (gl.material as THREE.MeshBasicMaterial).color.setHex(0x2ecc71) }
+    interiorSwitches.forEach((sg,i)=>{
+      const on = !!switchesOn[i]
+      sg.userData.on = on
+      const lever = sg.userData.lever as THREE.Mesh; lever.rotation.x = on ? -Math.PI*0.28 : Math.PI*0.38
+      const light = sg.userData.light as THREE.Mesh; (light.material as THREE.MeshBasicMaterial).color.setHex(on?0x2ecc71:0x442222)
+    })
     return true
   }catch{ return false }
 }
-function clearSave(){ localStorage.removeItem('hp_save_v2') }
+function clearSave(){ localStorage.removeItem('hp_save_v3'); localStorage.removeItem('hp_save_v2') }
 
 // Flashlight
 const flash = new THREE.SpotLight(0xfff4c8, 4.2, 22, Math.PI*0.31, 0.5, 1.8)
@@ -289,8 +299,8 @@ function renderUI(){
       <div class="menu-options" id="menu-opts"></div>
       <div class="menu-footer">
         TANK CONTROLS: W/S MOVE • A/D TURN • SHIFT RUN • E INTERACT • TAB MAP • F FLASHLIGHT<br>
-        KEY→FUSE→FUEL→GENERATOR→TAPES→DOOR→TUNE 147.7MHz • BATTERY DRAINS WHEN LIGHT ON<br>
-        <span style="color:#6ab0ff">PSX: 320×240 • GTE SNAP • AFFINE WARP • 15-BIT DITHER • CRT • SNOW</span> &nbsp; <span style="color:#2ecc71">● MAP: TAB/Q</span> ${prefersReducedMotion?'<span style="color:#ffaa44">[REDUCED MOTION]</span>':''}
+        KEY→FUSE→FUEL→GEN→TAPES→DOOR→ALIGN 3×INSIDE→TUNE 147.7MHz • BAT DRAINS • HOLD STILL+DARK TO HIDE<br>
+        <span style="color:#6ab0ff">PSX: 320×240 • GTE SNAP • AFFINE 0.32 • 192-DEPTH • CRT 0.12 • SNOW 450/f • 126KB GZIP</span> &nbsp; <span style="color:#2ecc71">● MAP: TAB/Q</span> ${prefersReducedMotion?'<span style="color:#ffaa44">[REDUCED MOTION]</span>':''}
       </div>
     `
     uiLayer.appendChild(menu)
@@ -312,8 +322,9 @@ function renderUI(){
     return
   }
   if(state==='playing' || state==='paused'){
-    // HUD with inventory + objectives
-    const objText = !hasKey ? 'FIND KEY [GARAGE]' : !hasFuse ? 'FIND FUSE [TOWER]' : !hasFuel ? 'FIND FUEL [BUNKER]' : !generatorRepaired ? 'REPAIR GENERATOR [SHED] E' : tapesCollected<4 ? `TAPES ${tapesCollected}/4` : !doorUnlocked ? 'UNLOCK OBSERVATORY [KEY] E' : 'TUNE TRANSMITTER 147.7 MHz [E]'
+    // HUD with inventory + objectives — extended chain with interior alignment
+    const switchesDone = switchesOn.every(Boolean)
+    const objText = !hasKey ? 'FIND KEY [GARAGE]' : !hasFuse ? 'FIND FUSE [TOWER]' : !hasFuel ? 'FIND FUEL [BUNKER]' : !generatorRepaired ? 'REPAIR GENERATOR [SHED] E' : tapesCollected<4 ? `TAPES ${tapesCollected}/4` : !doorUnlocked ? 'UNLOCK OBSERVATORY [KEY] E' : !switchesDone ? `ALIGN DISH [INSIDE ${switchesOn.filter(Boolean).length}/3]` : 'TUNE TRANSMITTER 147.7 MHz [E]'
     const objColor = objectivePulse>0 ? '#ff6b6b' : '#6ab0ff'
     const hud = document.createElement('div'); hud.className='hud'
     hud.innerHTML = `
@@ -634,11 +645,41 @@ function doInteract(){
       dialogueIndex=0; state='tape'; renderUI(); return true
     }
   }
+  // Interior console switches — only when inside unlocked observatory with power
+  if(doorUnlocked && generatorRepaired){
+    for(let i=0;i<interiorSwitches.length;i++){
+      const sg = interiorSwitches[i]
+      const wp = sg.userData.basePos as THREE.Vector3
+      if(player.pos.distanceTo(wp) < 2.2){
+        const on = !switchesOn[i]
+        switchesOn[i] = on
+        sg.userData.on = on
+        const lever = sg.userData.lever as THREE.Mesh; lever.rotation.x = on ? -Math.PI*0.28 : Math.PI*0.38
+        const light = sg.userData.light as THREE.Mesh; (light.material as THREE.MeshBasicMaterial).color.setHex(on?0x2ecc71:0x442222)
+        audio.playTone(on?520:320,0.12,'square',0.2)
+        const names = ['AZIMUTH','ELEVATION','PHASE']
+        const allOn = switchesOn.every(Boolean)
+        dialogueQueue=[{title:`CONSOLE — ${names[i]} ${on?'ON':'OFF'}`, text: allOn ? 'ALL THREE SERVOS ALIGNED. DISH IS TRACKING. READY TO TRANSMIT ON 147.7 MHz.' : `${names[i]} ${on?'ENGAGED':'DISENGAGED'} — ${switchesOn.filter(Boolean).length}/3 ALIGNED. ${on?'TWO MORE':'KEEP ALIGNING'}.`}]
+        dialogueIndex=0; state='tape'; objectivePulse=1.0; saveGame(); renderUI(); return true
+      }
+    }
+  }
+  if(doorUnlocked && !generatorRepaired){
+    for(let i=0;i<interiorSwitches.length;i++){
+      const sg = interiorSwitches[i]
+      const wp = sg.userData.basePos as THREE.Vector3
+      if(player.pos.distanceTo(wp) < 2.2){
+        dialogueQueue=[{title:'CONSOLE — NO POWER', text:'CONSOLE DEAD. RESTORE POWER AT THE GENERATOR SHED FIRST (FUSE + FUEL).'}]
+        dialogueIndex=0; state='tape'; renderUI(); return true
+      }
+    }
+  }
   const txPos = txGroup.position
   if(player.pos.distanceTo(txPos) < 2.6){
     if(!doorUnlocked){ dialogueQueue=[{title:'TRANSMITTER — BLOCKED', text:'TRANSMITTER INSIDE LOCKED OBSERVATORY. FIND KEY FIRST.'}]; dialogueIndex=0; state='tape'; renderUI(); return true }
     if(!generatorRepaired){ dialogueQueue=[{title:'TRANSMITTER — NO POWER', text:'NO POWER. REPAIR GENERATOR AT SHED FIRST (NEEDS FUSE + FUEL).'}]; dialogueIndex=0; state='tape'; renderUI(); return true }
     if(tapesCollected<4){ dialogueQueue=[{title:'TRANSMITTER — NEED TAPES', text:`NEED ${4-tapesCollected} MORE TAPE(S) TO RECALIBRATE. CHECK MAP MARKERS.`}]; dialogueIndex=0; state='tape'; renderUI(); return true }
+    if(!switchesOn.every(Boolean)){ const n = 3 - switchesOn.filter(Boolean).length; dialogueQueue=[{title:'TRANSMITTER — DISH MISALIGNED', text:`DISH NEEDS ALIGNMENT. ${n} CONSOLE SWITCH(ES) INSIDE OBSERVATORY STILL OFF. ENTER AND FLIP THEM.`}]; dialogueIndex=0; state='tape'; renderUI(); return true }
     state='tuning'; tuning=true; renderUI(); return true
   }
   audio.playTone(100,0.08,'square',0.08)
@@ -658,15 +699,13 @@ function setDreamcastMode(on: boolean){
     ;(vignette as HTMLElement).style.opacity = '0.22'
     ;(flicker as HTMLElement).style.display = 'none'
     ;(noise as HTMLElement).style.opacity = '0.012'
-    // disable PSX jitter - set to near zero
-    // materials will be Dreamcast Phong, not PSX, so jitter will be ignored
   } else {
     rt.setSize(PSX_WIDTH, PSX_HEIGHT)
     rt.texture.magFilter = THREE.NearestFilter
     rt.texture.minFilter = THREE.NearestFilter
-    crtMat.uniforms.uDistortion.value = 0.18
-    crtMat.uniforms.uScanline.value = 0.62
-    crtMat.uniforms.uChroma.value = 0.0014
+    crtMat.uniforms.uDistortion.value = 0.12
+    crtMat.uniforms.uScanline.value = 0.38
+    crtMat.uniforms.uChroma.value = 0.0010
     ;(overlay as HTMLElement).style.opacity = ''
     ;(vignette as HTMLElement).style.opacity = ''
     ;(flicker as HTMLElement).style.display = ''
@@ -735,6 +774,8 @@ function startGame(){
   flashlightBattery=1.0
   batteriesCollected=0
   hasKey=false; hasFuse=false; hasFuel=false; generatorRepaired=false; doorUnlocked=false; radioFreq=100.0; tuning=false; tuningHold=0; showMap=false; objectivePulse=0
+  switchesOn=[false,false,false]; lastHeardPos=null; stillTimer=0
+  interiorSwitches.forEach((sg,i)=>{ sg.userData.on=false; (sg.userData.lever as THREE.Mesh).rotation.x=Math.PI*0.38; ((sg.userData.light as THREE.Mesh).material as THREE.MeshBasicMaterial).color.setHex(0x442222) })
   tapes.forEach(t=>{ t.collected=false; t.mesh.visible=true; t.mesh.scale.set(1,1,1) })
   tapesCollected=0
   // reset world items
@@ -826,9 +867,9 @@ window.addEventListener('keydown', e=>{
 // Resize
 function onResize(){
   renderer.setSize(window.innerWidth, window.innerHeight)
-  // keep low-res target
-  rt.setSize(PSX_WIDTH, PSX_HEIGHT)
-  // update crt quad texture
+  // keep low-res target — respect Dreamcast mode
+  if(activeLevel==='sonic') rt.setSize(640,480)
+  else rt.setSize(PSX_WIDTH, PSX_HEIGHT)
 }
 window.addEventListener('resize', onResize)
 
@@ -849,21 +890,22 @@ function animate(){
   const jitter = prefersReducedMotion ? 0.08 : (state==='playing' ? (proximity*0.45 + 0.32) : 0.55)
   updatePsxMaterials(psxMaterials, time, jitter)
   crtMat.uniforms.uTime.value = time
-  if(prefersReducedMotion){ crtMat.uniforms.uDistortion.value = 0.06; crtMat.uniforms.uScanline.value = 0.25; } else { crtMat.uniforms.uDistortion.value = 0.18; crtMat.uniforms.uScanline.value = 0.62; }
+  if(prefersReducedMotion){ crtMat.uniforms.uDistortion.value = 0.06; crtMat.uniforms.uScanline.value = 0.25; } else { crtMat.uniforms.uDistortion.value = 0.12; crtMat.uniforms.uScanline.value = 0.38; }
 
-  // Snowfall
+  // Snowfall — throttled to 450 per frame (even indices) to halve CPU and avoid frame shimmer/tearing
   const posAttr = snowGeo.getAttribute('position') as THREE.BufferAttribute
-  for(let i=0;i<900;i++){
+  const snowStep = 2 // only update half each frame, alternating
+  const snowOffset = (frameAcc*60)%2 <1 ? 0:1
+  for(let i=snowOffset;i<900;i+=snowStep){
     let y = posAttr.getY(i)
-    y -= snowVel[i] * dt
+    y -= snowVel[i] * dt * snowStep
     if(y < 0){
       y = 38 + Math.random()*8
-      posAttr.setX(i, (Math.random()-0.5)*120 + player.pos.x*0.08) // drift with player
-      posAttr.setZ(i, (Math.random()-0.5)*120 + player.pos.z*0.08)
+      posAttr.setX(i, (Math.random()-0.5)*120 + player.pos.x*0.06)
+      posAttr.setZ(i, (Math.random()-0.5)*120 + player.pos.z*0.06)
     }
     posAttr.setY(i, y)
-    // slight wind
-    posAttr.setX(i, posAttr.getX(i) + Math.sin(time*0.4 + i)*0.02*dt*18)
+    posAttr.setX(i, posAttr.getX(i) + Math.sin(time*0.35 + i*0.11)*0.012*dt*18)
   }
   posAttr.needsUpdate = true
   // Interior visibility - show when door unlocked and near
@@ -885,12 +927,25 @@ function animate(){
     // subtle dish rotation even in bios? world still renders behind? we render scene anyway
   }
 
-  // Dish slowly tracks player when not won
+  // Dish: tracks player only until servos aligned, then locks north (goal direction)
   if(dishGroup){
-    const targetYaw = Math.atan2(player.pos.x - dishGroup.position.x, player.pos.z - dishGroup.position.z)
-    dishGroup.rotation.y += (targetYaw - dishGroup.rotation.y)*dt*0.25
-    dishGroup.rotation.y += Math.sin(time*0.3)*0.002
+    const switchesDone = switchesOn.every(Boolean)
+    const targetYaw = switchesDone ? 0 : Math.atan2(player.pos.x - dishGroup.position.x, player.pos.z - dishGroup.position.z)
+    dishGroup.rotation.y += (targetYaw - dishGroup.rotation.y)*dt*0.32
+    if(!switchesDone) dishGroup.rotation.y += Math.sin(time*0.3)*0.002
+    // visual feedback: dish ticks when servos flip
+    if(switchesDone) dishGroup.rotation.y += Math.sin(time*2.8)*0.001
   }
+  // Animate interior switch levers lerp + dish-aligned glow
+  interiorSwitches.forEach(sg=>{
+    const on = !!sg.userData.on
+    const lever = sg.userData.lever as THREE.Mesh
+    const tgt = on ? -Math.PI*0.28 : Math.PI*0.38
+    lever.rotation.x = THREE.MathUtils.lerp(lever.rotation.x, tgt, dt*8)
+    const light = sg.userData.light as THREE.Mesh
+    const pulse = on ? 0.18*Math.sin(time*4 + (sg.userData.idx as number)):0
+    ;(light.material as THREE.MeshBasicMaterial).color.setHSL(on?0.33:0, on?0.9:0.4, on?0.48+pulse:0.22)
+  })
   // Tower light blink
   if(towerLight){
     const on = Math.floor(time*1.8)%2===0
@@ -1105,24 +1160,38 @@ function animate(){
       hearTimer = Math.max(0, hearTimer - dt)
     }
 
-    // Entity AI
+    // Entity AI — with investigate + hiding + lastHeardPos
     const distToPlayer = entityGroup.position.distanceTo(player.pos)
     proximity = THREE.MathUtils.clamp(1 - distToPlayer/22, 0, 1)
-    // Flashlight proximity penalty - light makes you more visible
-    const lightPenalty = flashlightOn ? 0.12 : 0
-    const visibleDist = 16 + lightPenalty*10 + (isRun?4:0)
+    // Hiding: standing still, no light, no run for 1.8s makes you harder to see
+    const isMoving = Math.abs(forward)>0.06 || Math.abs(turn)>0.08
+    if(!isMoving && !flashlightOn && !isRun){
+      stillTimer += dt
+    } else stillTimer = 0
+    const hiding = stillTimer > 1.8 ? 0.22 : 0
+    // Light + run make you visible further; hiding reduces
+    const lightPenalty = flashlightOn ? 0.14 : 0
+    const visibleDist = 16 + lightPenalty*10 + (isRun?5:0) - hiding*9
     const canSee = distToPlayer < visibleDist && distToPlayer > 1.0
+    // remember last heard position for investigate state
+    if(hearTimer>0.1) lastHeardPos = player.pos.clone()
 
-    // State transitions
+    // State transitions: stun > chase > investigate > patrol
     if(entityStun>0){
       entityStun-=dt
       entityState='stun'
       if(entityStun<=0) entityState='patrol'
-    } else if(canSee && (proximity>0.32 || hearTimer>0)){
+    } else if(canSee && (proximity>0.30 || hearTimer>0)){
       entityState='chase'
-    } else if(entityState==='chase' && distToPlayer>24){
+      lastHeardPos = player.pos.clone()
+    } else if(entityState==='chase' && distToPlayer>26){
+      // lose sight -> investigate last heard
       entityState='patrol'
-      entityPatrolTarget.set((Math.random()-0.5)*30+8,0,(Math.random()-0.5)*30)
+      if(lastHeardPos) entityPatrolTarget.copy(lastHeardPos)
+      else entityPatrolTarget.set((Math.random()-0.5)*30+8,0,(Math.random()-0.5)*30)
+    } else if(!canSee && hearTimer>0 && lastHeardPos && entityState!=='chase'){
+      // investigate sound without seeing — walk to sound source
+      entityPatrolTarget.copy(lastHeardPos)
     }
 
     const diffMult = difficulty==='easy'?0.78 : difficulty==='hard'?1.32 : 1
@@ -1162,17 +1231,19 @@ function animate(){
       }
     }
 
-    // Flashlight as weapon - stun if close and facing (adversarial balance: reduced range)
-    if(flashlightOn && distToPlayer < 4.2){
+    // Flashlight stun — shorter window, needs centre aim, costs battery burst
+    if(flashlightOn && flashlightBattery>0.06 && distToPlayer < 4.6){
       const toEntity = entityGroup.position.clone().sub(player.pos).normalize()
       const forwardVec = new THREE.Vector3(Math.sin(player.yaw),0,Math.cos(player.yaw))
       const dot = forwardVec.dot(toEntity)
-      if(dot>0.82 && entityStun<=0){
-        entityStun = 1.1
+      if(dot>0.86 && entityStun<=0){
+        entityStun = 1.25
         entityState='stun'
-        // knockback
-        entityGroup.position.add(toEntity.multiplyScalar(0.9))
+        entityGroup.position.add(toEntity.multiplyScalar(1.0))
+        flashlightBattery = Math.max(0, flashlightBattery - 0.08)
         audio.playStatic()
+        // feedback
+        objectivePulse = 0.6
       }
     }
 
@@ -1229,16 +1300,11 @@ function animate(){
       camPos.y = camHeight
     }
   }
-  // Smooth follow with PS1-style micro-jitter (much subtler to avoid screen tearing)
-  camera.position.lerp(camPos, state==='playing' ? 0.10 : 0.04)
+  // Smooth follow — no per-frame random jitter (was causing screen tearing). PSX wobble comes from
+  // vertex snap in shader, not camera translate. Use damped spring lerp only.
+  camera.position.lerp(camPos, state==='playing' ? 0.11 : 0.05)
   const lookAt = player.pos.clone().add(new THREE.Vector3(0,1.02,0))
   camera.lookAt(lookAt)
-  // Very subtle sub-pixel jitter for CRT feel - 1/256 instead of 1/64 to avoid tearing
-  // Keep lookAt stable to prevent whole-screen tear lines
-  if(state==='playing' && proximity < 0.6){
-    camera.position.x += (Math.random()-0.5)*0.004
-    camera.position.y += (Math.random()-0.5)*0.004
-  }
 
   // Flashlight follows camera/player - battery affects intensity
   flash.position.copy(player.pos).add(new THREE.Vector3(0,1.18,0))

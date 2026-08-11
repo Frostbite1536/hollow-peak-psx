@@ -512,7 +512,41 @@ export function createWorld(scene: THREE.Scene, psxMaterials: THREE.Material[]) 
     screen.position.set(dx,1.12, -1.13)
     interiorGroup.add(screen)
   }
-  // transmitter inside is txGroup, move it slightly inside for interior view
+  // Transmitter indicator inside + 3 console switches (alignment puzzle)
+  // Switches require generator power; each toggles a dish servo. All three must be ON to transmit.
+  const interiorSwitches: THREE.Group[] = []
+  const switchPos: [number,number][] = [[-4.2,-3.6],[0,-3.6],[4.2,-3.6]]
+  switchPos.forEach(([x,z], idx)=>{
+    const sg = new THREE.Group()
+    sg.position.set(x, 1.05, z)
+    // wall box
+    const box = new THREE.Mesh(new THREE.BoxGeometry(0.62,0.62,0.14), new THREE.MeshLambertMaterial({ color: 0x2a2a32 }))
+    // psxify inline
+    const m = box.material as THREE.MeshLambertMaterial
+    psxifyMaterial(m); psxMaterials.push(m)
+    box.position.y = 0
+    sg.add(box)
+    // lever
+    const lever = new THREE.Mesh(new THREE.BoxGeometry(0.08,0.32,0.08), new THREE.MeshLambertMaterial({ color: 0xd0d0d0 }))
+    const lm = lever.material as THREE.MeshLambertMaterial; psxifyMaterial(lm); psxMaterials.push(lm)
+    lever.position.set(0,0.06,0.14)
+    lever.rotation.x = Math.PI*0.38 // off
+    lever.userData.isLever = true
+    sg.add(lever)
+    // status light
+    const light = new THREE.Mesh(new THREE.SphereGeometry(0.09,6,6), new THREE.MeshBasicMaterial({ color: 0x442222 }))
+    light.position.set(0,0.38,0.12)
+    light.userData.isLight = true
+    sg.add(light)
+    // label
+    const label = new THREE.Mesh(new THREE.PlaneGeometry(0.42,0.14), new THREE.MeshBasicMaterial({ color: [0xe85d5d,0x5da6e8,0x7ad67a][idx] as any }))
+    label.position.set(0,-0.38,0.09)
+    label.rotation.x = -0.08
+    sg.add(label)
+    sg.userData = { isSwitch:true, idx, lever, light, on:false, basePos: new THREE.Vector3(22+x, 1.05, -0.8+z) }
+    interiorGroup.add(sg)
+    interiorSwitches.push(sg)
+  })
   interiorGroup.visible = false // toggled when door unlocked and near
   scene.add(interiorGroup)
 
@@ -564,5 +598,5 @@ export function createWorld(scene: THREE.Scene, psxMaterials: THREE.Material[]) 
   // cliff walls at far edges via extra colliders
   // forest walls considered soft colliders - we handle via distance
 
-  return { tapes, colliders, moon, dishGroup, towerLight: light, txGroup, doorGroup, genGroup, keyGroup, fuseGroup, fuelGroup, batteries, interiorGroup, snowfall, snowGeo, snowPos, snowVel, psxMaterials }
+  return { tapes, colliders, moon, dishGroup, towerLight: light, txGroup, doorGroup, genGroup, keyGroup, fuseGroup, fuelGroup, batteries, interiorGroup, interiorSwitches, snowfall, snowGeo, snowPos, snowVel, psxMaterials }
 }

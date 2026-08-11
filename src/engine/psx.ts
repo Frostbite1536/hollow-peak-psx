@@ -32,25 +32,25 @@ export function psxifyMaterial(mat: THREE.MeshStandardMaterial | THREE.MeshLambe
     shader.vertexShader = shader.vertexShader.replace(
       '#include <project_vertex>',
       `
-      // PSX GTE: fixed-point snap without tearing
-      // Original PS1 quantized to screen pixels after projection. Per-vertex hash causes cracks,
-      // so we use uniform frame jitter + tiny vertex-consistent offset
+      // PSX GTE: fixed-point snap — authentic jitter WITHOUT triangle cracks.
+      // PS1 lacked subpixel precision, so vertices snap to screen pixels. The original
+      // per-vertex hash created cracks/tearing at triangle edges. Fix: uniform per-frame
+      // wobble only, no per-vertex divergence.
       vec4 mvPosition = vec4(transformed, 1.0);
       mvPosition = modelViewMatrix * mvPosition;
       vec4 projPos = projectionMatrix * mvPosition;
       projPos.xyz /= projPos.w;
-      // Snap to 320x240 subpixels (PS1 1px), not 160x120 which was too coarse and caused tearing
       float snapX = 1.0 / 320.0;
       float snapY = 1.0 / 240.0;
-      // Uniform global wobble (polygon swim) + very small per-vertex bias that's stable per triangle
-      // Use object-space XZ hash with low amplitude to avoid triangle cracks
-      float vHash = fract(sin(dot(position.xz, vec2(12.9898, 78.233))) * 43758.5453) - 0.5;
-      float globalWob = sin(uTime * 0.95 + dot(mvPosition.xy, vec2(0.12,0.08))) * 0.0018 * uJitter;
-      float wob = globalWob + vHash * 0.00055 * uJitter;
+      // Uniform polygon swim — global only, zero per-vertex bias → no cracks
+      float globalWob = sin(uTime * 0.88 + dot(mvPosition.xy, vec2(0.11,0.07))) * 0.00105 * uJitter;
+      // Secondary low-freq swim for larger polygons (adds life without tearing)
+      float swim2 = sin(uTime * 0.31 + mvPosition.x * 0.04) * 0.00038 * uJitter;
+      float wob = globalWob + swim2;
       projPos.x = floor(projPos.x / snapX + 0.5) * snapX + wob;
-      projPos.y = floor(projPos.y / snapY + 0.5) * snapY + wob * 0.78;
-      // Softer Z quantization - 256 levels avoids Z-fighting tearing while keeping PS1 sorting vibe
-      projPos.z = floor(projPos.z * 256.0) / 256.0;
+      projPos.y = floor(projPos.y / snapY + 0.5) * snapY + wob * 0.72;
+      // Z quantization — 192 levels: enough depth sorting, no Z-fighting grid
+      projPos.z = floor(projPos.z * 192.0) / 192.0;
       vAffineUv *= projPos.w;
       gl_Position = vec4(projPos.xy * projPos.w, projPos.z * projPos.w, projPos.w);
       `
@@ -97,12 +97,11 @@ export function psxifyMaterial(mat: THREE.MeshStandardMaterial | THREE.MeshLambe
         // vAffineUv already contains w-weighted UV, so dividing by small constant approximates screen-space
         // Use correct approach: affineUv = vAffineUv / (projW approx). Since we don't have projW here,
         // we use vMapUv as perspective-correct reference and lerp 35% affine for visible swim without tearing
-        vec2 affineUv = vAffineUv * 0.85; // scale to keep in 0-1 without overflow
-        // Clamp affine to avoid tearing at distance
+        // Affine strength 0.32 keeps visible swim on ground/wood but avoids stripe tearing
+        vec2 affineUv = vAffineUv * 0.85;
         affineUv = clamp(affineUv, 0.0, 1.0);
-        vec2 finalUv = mix(vMapUv, affineUv, 0.38);
-        // Subtle texel snap - only 96 levels to avoid block tearing
-        finalUv = floor(finalUv * 96.0) / 96.0;
+        vec2 finalUv = mix(vMapUv, affineUv, 0.32);
+        finalUv = floor(finalUv * 88.0) / 88.0;
         vec4 sampledDiffuseColor = texture2D(map, finalUv);
         diffuseColor *= sampledDiffuseColor;
       #endif
