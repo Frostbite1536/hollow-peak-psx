@@ -309,6 +309,143 @@ export function createWorld(scene: THREE.Scene, psxMaterials: THREE.Material[]) 
     tapes.push({ mesh: g, collected:false, pos: p.clone() })
   })
 
+  // --- NEW GAMEPLAY OBJECTS ---
+  // Locked observatory door (blocks transmitter until key found)
+  const doorGroup = new THREE.Group()
+  doorGroup.position.set(22,0,5.05)
+  const doorGeo = new THREE.BoxGeometry(2.2,2.8,0.18)
+  const doorMat = new THREE.MeshLambertMaterial({ color: 0x4a3a2a })
+  psxifyMaterial(doorMat); psxMaterials.push(doorMat)
+  const doorMesh = new THREE.Mesh(doorGeo, doorMat)
+  doorMesh.position.y = 1.4
+  doorGroup.add(doorMesh)
+  // door frame
+  const frameGeo = new THREE.BoxGeometry(2.6,3.0,0.12)
+  const frameMat = new THREE.MeshBasicMaterial({ color: 0x2a2a2a })
+  const frame = new THREE.Mesh(frameGeo, frameMat)
+  frame.position.set(0,1.45,-0.08)
+  doorGroup.add(frame)
+  // padlock
+  const lockGeo = new THREE.BoxGeometry(0.28,0.32,0.12)
+  const lockMat = new THREE.MeshLambertMaterial({ color: 0xd4b024 })
+  psxifyMaterial(lockMat); psxMaterials.push(lockMat)
+  const lockMesh = new THREE.Mesh(lockGeo, lockMat)
+  lockMesh.position.set(0.52,1.35,0.14)
+  doorGroup.add(lockMesh)
+  doorGroup.userData = { isDoor:true, mesh: doorMesh, lock: lockMesh }
+  scene.add(doorGroup)
+
+  // Generator at shed
+  const genGroup = new THREE.Group()
+  genGroup.position.set(18,0,-16)
+  const genBoxGeo = new THREE.BoxGeometry(1.8,1.0,1.2)
+  const genBoxMat = new THREE.MeshLambertMaterial({ color: 0x3a4a3a })
+  psxifyMaterial(genBoxMat); psxMaterials.push(genBoxMat)
+  const genBox = new THREE.Mesh(genBoxGeo, genBoxMat)
+  genBox.position.set(0,0.62,0)
+  genGroup.add(genBox)
+  const genLightGeo = new THREE.SphereGeometry(0.14,6,6)
+  const genLightMat = new THREE.MeshBasicMaterial({ color: 0x442222 })
+  const genLight = new THREE.Mesh(genLightGeo, genLightMat)
+  genLight.position.set(0,1.22,0)
+  genGroup.add(genLight)
+  // lever
+  const leverGeo = new THREE.CylinderGeometry(0.04,0.04,0.5,4)
+  const leverMat = new THREE.MeshLambertMaterial({ color: 0xaa2222 })
+  psxifyMaterial(leverMat); psxMaterials.push(leverMat)
+  const lever = new THREE.Mesh(leverGeo, leverMat)
+  lever.position.set(0.45,0.78,0.62)
+  lever.rotation.x = Math.PI*0.35
+  genGroup.add(lever)
+  genGroup.userData = { isGenerator:true, light: genLight, lever }
+  scene.add(genGroup)
+
+  // Key - in garage
+  const keyGroup = new THREE.Group()
+  keyGroup.position.set(-16.2,0.42,-8.8)
+  const keyRingGeo = new THREE.TorusGeometry(0.14,0.02,6,10)
+  const keyMat = new THREE.MeshLambertMaterial({ color: 0xd4b024 })
+  psxifyMaterial(keyMat); psxMaterials.push(keyMat)
+  const ring = new THREE.Mesh(keyRingGeo, keyMat)
+  ring.position.y = 0.18
+  ring.rotation.x = Math.PI/2
+  keyGroup.add(ring)
+  const keyBladeGeo = new THREE.BoxGeometry(0.04,0.02,0.38)
+  const blade = new THREE.Mesh(keyBladeGeo, keyMat)
+  blade.position.set(0,0.18,0.24)
+  keyGroup.add(blade)
+  const keyGlow = new THREE.Mesh(new THREE.RingGeometry(0.5,0.6,10), new THREE.MeshBasicMaterial({ color: 0xd4b024, transparent:true, opacity:0.18, side:THREE.DoubleSide }))
+  keyGlow.rotation.x = -Math.PI/2; keyGlow.position.y=0.02
+  keyGroup.add(keyGlow)
+  const keyArrow = new THREE.Mesh(new THREE.ConeGeometry(0.16,0.32,4), new THREE.MeshBasicMaterial({ color: 0xffe066, transparent:true, opacity:0.75 }))
+  keyArrow.position.y=0.95; keyArrow.rotation.x=Math.PI; keyArrow.userData={isArrow:true}
+  keyGroup.add(keyArrow)
+  keyGroup.userData={ isKey:true, pos: keyGroup.position.clone() }
+  scene.add(keyGroup)
+
+  // Fuse - at tower
+  const fuseGroup = new THREE.Group()
+  fuseGroup.position.set(-7.6,0.42,21.2)
+  const fuseGeo = new THREE.CylinderGeometry(0.12,0.12,0.5,6)
+  const fuseMat = new THREE.MeshLambertMaterial({ color: 0x4a8ac8 })
+  psxifyMaterial(fuseMat); psxMaterials.push(fuseMat)
+  const fuseMesh = new THREE.Mesh(fuseGeo, fuseMat)
+  fuseMesh.position.y=0.18
+  fuseMesh.rotation.z=Math.PI/2
+  fuseGroup.add(fuseMesh)
+  // fuse caps
+  const capGeo = new THREE.CylinderGeometry(0.14,0.14,0.08,6)
+  const capMat = new THREE.MeshLambertMaterial({ color: 0x888888 })
+  psxifyMaterial(capMat); psxMaterials.push(capMat)
+  for(let s of [-0.28,0.28]){ const c=new THREE.Mesh(capGeo, capMat); c.position.set(0,0.18,s); c.rotation.z=Math.PI/2; fuseGroup.add(c) }
+  const fuseGlow = new THREE.Mesh(new THREE.RingGeometry(0.48,0.58,10), new THREE.MeshBasicMaterial({ color: 0x4a8ac8, transparent:true, opacity:0.18, side:THREE.DoubleSide }))
+  fuseGlow.rotation.x=-Math.PI/2; fuseGlow.position.y=0.02
+  fuseGroup.add(fuseGlow)
+  const fuseArrow = keyArrow.clone(); fuseArrow.material = new THREE.MeshBasicMaterial({ color: 0x6ab8ff, transparent:true, opacity:0.75 }); fuseGroup.add(fuseArrow)
+  fuseGroup.userData={ isFuse:true, pos: fuseGroup.position.clone() }
+  scene.add(fuseGroup)
+
+  // Fuel can - at bunker
+  const fuelGroup = new THREE.Group()
+  fuelGroup.position.set(3.8,0.42,-24.6)
+  const fuelGeo = new THREE.BoxGeometry(0.5,0.62,0.32)
+  const fuelMat = new THREE.MeshLambertMaterial({ color: 0xc0392b })
+  psxifyMaterial(fuelMat); psxMaterials.push(fuelMat)
+  const fuelMesh = new THREE.Mesh(fuelGeo, fuelMat)
+  fuelMesh.position.y=0.32
+  fuelGroup.add(fuelMesh)
+  // handle
+  const handleGeo = new THREE.TorusGeometry(0.12,0.02,4,8, Math.PI)
+  const handle = new THREE.Mesh(handleGeo, new THREE.MeshBasicMaterial({ color: 0x222222 }))
+  handle.position.set(0,0.64,0); handle.rotation.y=Math.PI/2
+  fuelGroup.add(handle)
+  const fuelGlow = new THREE.Mesh(new THREE.RingGeometry(0.5,0.6,10), new THREE.MeshBasicMaterial({ color: 0xc0392b, transparent:true, opacity:0.16, side:THREE.DoubleSide }))
+  fuelGlow.rotation.x=-Math.PI/2; fuelGlow.position.y=0.02
+  fuelGroup.add(fuelGlow)
+  const fuelArrow = keyArrow.clone(); fuelArrow.material = new THREE.MeshBasicMaterial({ color: 0xff6b6b, transparent:true, opacity:0.75 }); fuelGroup.add(fuelArrow)
+  fuelGroup.userData={ isFuel:true, pos: fuelGroup.position.clone() }
+  scene.add(fuelGroup)
+
+  // Batteries (3) - scattered
+  const batteryPositions = [
+    new THREE.Vector3(24.2,0.32, -1.2),
+    new THREE.Vector3(6.2,0.32, 8.4),
+    new THREE.Vector3(-2.2,0.32, -16.4),
+  ]
+  const batteries: THREE.Group[] = []
+  batteryPositions.forEach(p=>{
+    const bg = new THREE.Group(); bg.position.copy(p)
+    const bGeo = new THREE.CylinderGeometry(0.1,0.1,0.32,6)
+    const bMat = new THREE.MeshLambertMaterial({ color: 0x2ecc71 })
+    psxifyMaterial(bMat); psxMaterials.push(bMat)
+    const b = new THREE.Mesh(bGeo, bMat); b.position.y=0.18; b.rotation.z=Math.PI/2; bg.add(b)
+    const bGlow = new THREE.Mesh(new THREE.RingGeometry(0.35,0.42,8), new THREE.MeshBasicMaterial({ color: 0x2ecc71, transparent:true, opacity:0.14, side:THREE.DoubleSide }))
+    bGlow.rotation.x=-Math.PI/2; bGlow.position.y=0.02; bg.add(bGlow)
+    const bArrow = keyArrow.clone(); bArrow.scale.set(0.7,0.7,0.7); bArrow.material = new THREE.MeshBasicMaterial({ color: 0x7aff8a, transparent:true, opacity:0.7 }); bg.add(bArrow)
+    bg.userData={ isBattery:true, pos: p.clone() }
+    scene.add(bg); batteries.push(bg)
+  })
+
   // Transmitter - goal after tapes
   const txGroup = new THREE.Group()
   txGroup.position.set(22,0,6.5)
@@ -367,5 +504,5 @@ export function createWorld(scene: THREE.Scene, psxMaterials: THREE.Material[]) 
   // cliff walls at far edges via extra colliders
   // forest walls considered soft colliders - we handle via distance
 
-  return { tapes, colliders, moon, dishGroup, towerLight: light, txGroup, psxMaterials }
+  return { tapes, colliders, moon, dishGroup, towerLight: light, txGroup, doorGroup, genGroup, keyGroup, fuseGroup, fuelGroup, batteries, psxMaterials }
 }

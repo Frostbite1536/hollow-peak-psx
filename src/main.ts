@@ -6,7 +6,7 @@ import { AudioManager } from './game/audio'
 import { createWorld } from './game/world'
 
 // Types
-type GameState = 'bios'|'title'|'playing'|'paused'|'tape'|'won'|'lost'
+type GameState = 'bios'|'title'|'playing'|'paused'|'tape'|'tuning'|'won'|'lost'
 
 const app = document.getElementById('app')!
 const container = document.createElement('div')
@@ -62,9 +62,9 @@ const crtMat = new THREE.ShaderMaterial({
   uniforms: {
     tDiffuse: { value: rt.texture },
     uTime: { value: 0 },
-    uDistortion: { value: 0.32 },
-    uScanline: { value: 0.85 },
-    uChroma: { value: 0.0022 }
+    uDistortion: { value: 0.18 },
+    uScanline: { value: 0.62 },
+    uChroma: { value: 0.0014 }
   },
   vertexShader: CRTVertex,
   fragmentShader: CRTFragment,
@@ -76,7 +76,7 @@ crtScene.add(crtQuad)
 
 // PSX materials collection
 const psxMaterials: THREE.Material[] = []
-const { tapes, colliders, dishGroup, towerLight, txGroup } = createWorld(scene, psxMaterials)
+const { tapes, colliders, dishGroup, towerLight, txGroup, doorGroup, genGroup, keyGroup, fuseGroup, fuelGroup, batteries } = createWorld(scene, psxMaterials)
 
 // Player
 const player = {
@@ -146,10 +146,22 @@ let dialogueQueue: {title:string, text:string}[] = []
 let dialogueIndex = 0
 let tapesCollected = 0
 let flashlightOn = true
+let flashlightBattery = 1.0 // 0-1, drains when on, batteries restore
+let batteriesCollected = 0
+let hasKey = false
+let hasFuse = false
+let hasFuel = false
+let generatorRepaired = false
+let doorUnlocked = false
+let radioFreq = 100.0 // MHz, need 147.7
+let tuning = false
+let tuningHold = 0
 let footstepTimer = 0
 let proximity = 0
 let invuln = 0
 let wonTimer = 0
+let showMap = false
+let objectivePulse = 0
 
 // Flashlight
 const flash = new THREE.SpotLight(0xfff4c8, 4.2, 22, Math.PI*0.31, 0.5, 1.8)
@@ -157,9 +169,17 @@ flash.position.set(0,1.2,0)
 scene.add(flash)
 scene.add(flash.target)
 
-// Foot path helper
+// Door-aware collision: allow passage through door opening when unlocked
 function checkCollision(next: THREE.Vector3, radius=0.45){
-  for(const b of colliders){
+  for(let i=0;i<colliders.length;i++){
+    const b = colliders[i]
+    // observatory is index 0 - make doorway passable when unlocked
+    if(i===0 && doorUnlocked){
+      const doorX = 22, doorZ = 5.05
+      const doorHalfW = 1.35
+      const isAtDoor = Math.abs(next.x - doorX) < doorHalfW + radius && Math.abs(next.z - doorZ) < 0.9
+      if(isAtDoor) continue
+    }
     const clamped = new THREE.Vector3(
       Math.max(b.min.x, Math.min(b.max.x, next.x)),
       0,
@@ -169,7 +189,6 @@ function checkCollision(next: THREE.Vector3, radius=0.45){
     const dz = next.z - clamped.z
     if(dx*dx+dz*dz < radius*radius) return true
   }
-  // world bounds soft wall
   if(next.length() > 78) return true
   return false
 }
@@ -204,9 +223,9 @@ function renderUI(){
       <div class="menu-subtitle">WINTER 1998 — THE SIGNAL WENT DARK</div>
       <div class="menu-options" id="menu-opts"></div>
       <div class="menu-footer">
-        TANK CONTROLS: W/S MOVE • A/D TURN • SHIFT RUN • E INTERACT • F FLASHLIGHT • ESC PAUSE<br>
-        COLLECT 4 LOST TAPES • RESTORE THE TRANSMITTER • AVOID THE LISTENER<br>
-        <span style="color:#c44">PSX RENDER: 320×240 • VERTEX SNAP • DITHER • CRT</span>
+        TANK CONTROLS: W/S MOVE • A/D TURN • SHIFT RUN • E INTERACT • TAB MAP • F FLASHLIGHT<br>
+        KEY→FUSE→FUEL→GENERATOR→TAPES→DOOR→TUNE 147.7MHz • BATTERY DRAINS WHEN LIGHT ON<br>
+        <span style="color:#6ab0ff">PSX: 320×240 • GTE SNAP • AFFINE WARP • 15-BIT DITHER • CRT • FOG</span> &nbsp; <span style="color:#2ecc71">● MAP: TAB/Q</span>
       </div>
     `
     uiLayer.appendChild(menu)
@@ -227,25 +246,35 @@ function renderUI(){
     return
   }
   if(state==='playing' || state==='paused'){
-    // HUD
+    // HUD with inventory + objectives
+    const objText = !hasKey ? 'FIND KEY [GARAGE]' : !hasFuse ? 'FIND FUSE [TOWER]' : !hasFuel ? 'FIND FUEL [BUNKER]' : !generatorRepaired ? 'REPAIR GENERATOR [SHED] E' : tapesCollected<4 ? `TAPES ${tapesCollected}/4` : !doorUnlocked ? 'UNLOCK OBSERVATORY [KEY] E' : 'TUNE TRANSMITTER 147.7 MHz [E]'
+    const objColor = objectivePulse>0 ? '#ff6b6b' : '#6ab0ff'
     const hud = document.createElement('div'); hud.className='hud'
     hud.innerHTML = `
       <div class="hud-top">
         <div>
-          <div style="font-size:9px;color:#666;letter-spacing:0.2em;margin-bottom:4px">HOLLOW PEAK // TAPE RECOVERY</div>
+          <div style="font-size:9px;color:#666;letter-spacing:0.2em;margin-bottom:4px">HOLLOW PEAK // ${generatorRepaired?'POWER ON':'POWER OFF'} • ${objText}</div>
           <div class="hud-tapes" id="hud-tapes"></div>
+          <div style="display:flex;gap:6px;margin-top:6px;font-size:9px">
+            <span style="padding:2px 6px;border:1px solid ${hasKey?'#d4b024':'#333'};background:${hasKey?'#2a2210':'#111'};color:${hasKey?'#ffd84d':'#444'}">KEY ${hasKey?'●':''}</span>
+            <span style="padding:2px 6px;border:1px solid ${hasFuse?'#4a8ac8':'#333'};background:${hasFuse?'#102030':'#111'};color:${hasFuse?'#6ab8ff':'#444'}">FUSE ${hasFuse?'●':''}</span>
+            <span style="padding:2px 6px;border:1px solid ${hasFuel?'#c0392b':'#333'};background:${hasFuel?'#2a1010':'#111'};color:${hasFuel?'#ff6b6b':'#444'}">FUEL ${hasFuel?'●':''}</span>
+            <span style="padding:2px 6px;border:1px solid ${generatorRepaired?'#2ecc71':'#333'};background:${generatorRepaired?'#0f2a14':'#111'};color:${generatorRepaired?'#2ecc71':'#444'}">GEN ${generatorRepaired?'ON':'OFF'}</span>
+            <span style="padding:2px 6px;border:1px solid #333;background:#111;color:${flashlightBattery<0.25?'#ff4444':'#aaa'}">BAT ${Math.floor(flashlightBattery*100)}% ${flashlightBattery<0.15?'⚠':''}</span>
+          </div>
         </div>
         <div class="hud-signal">
-          <div>SIGNAL: <span style="color:${proximity>0.6?'#e55':'#888'}">${tapesCollected}/4 TAPES</span></div>
+          <div>SIGNAL: <span style="color:${proximity>0.6?'#e55':'#888'}">${tapesCollected}/4 TAPES</span> <span style="font-size:9px;color:${objColor}">▶ ${objText}</span></div>
           <div class="signal-bar"><div class="signal-fill" id="sig-fill"></div></div>
-          <div style="font-size:9px;color:#555;margin-top:2px">${flashlightOn?'FLASHLIGHT ON':'FLASHLIGHT OFF'} • ${Math.floor(player.stamina*100)}% STAM</div>
+          <div style="font-size:9px;color:#555;margin-top:2px">${flashlightOn && flashlightBattery>0?'FLASHLIGHT ON':'FLASHLIGHT OFF'} • FREQ ${radioFreq.toFixed(1)} • ${Math.floor(player.stamina*100)}% STAM ${showMap?'• MAP [M] ON':''}</div>
         </div>
       </div>
       <div class="hud-bottom">
         <div class="hud-controls">
-          <div><b>W/S</b> MOVE &nbsp; <b>A/D</b> TURN &nbsp; <b>SHIFT</b> RUN &nbsp; <b>E</b> INTERACT</div>
+          <div><b>W/S</b> MOVE &nbsp; <b>A/D</b> TURN &nbsp; <b>SHIFT</b> RUN &nbsp; <b>E</b> INTERACT &nbsp; <b>TAB</b> MAP</div>
           <div><b>F</b> FLASHLIGHT &nbsp; <b>ESC</b> PAUSE &nbsp; <b>M</b> MUTE</div>
           <div class="stamina-bar"><div class="stamina-fill" id="stam-fill"></div></div>
+          <div style="width:100px;height:4px;background:#111;border:1px solid #222;margin-top:4px"><div id="bat-fill" style="height:100%;background:${flashlightBattery<0.2?'#c44':'#2ecc71'};width:${flashlightBattery*100}%"></div></div>
         </div>
         <div class="compass" id="compass">N • E • S • W</div>
       </div>
@@ -286,6 +315,32 @@ function renderUI(){
       pm.querySelector('#restart')!.addEventListener('click', ()=> startGame())
       pm.querySelector('#titleBtn')!.addEventListener('click', ()=> {state='title'; renderUI()})
     }
+    // Map overlay (TAB)
+    if(showMap && state==='playing'){
+      const mapEl = document.createElement('div')
+      mapEl.style.cssText='position:absolute;right:14px;top:68px;width:190px;height:190px;background:rgba(8,12,16,0.92);border:1px solid #333;border-top:2px solid #6ab0ff;padding:8px;pointer-events:none'
+      mapEl.innerHTML=`
+        <div style="font-size:9px;letter-spacing:0.18em;color:#6ab0ff;margin-bottom:6px">SITE MAP — HOLLOW PEAK</div>
+        <div style="position:relative;width:172px;height:132px;background:#0d141e;border:1px solid #222;overflow:hidden">
+          <div style="position:absolute;left:50%;top:50%;width:2px;height:2px;background:#fff;transform:translate(-50%,-50%);box-shadow:0 0 4px #fff"></div>
+          <div id="map-player" style="position:absolute;width:6px;height:6px;background:#ffd84d;border:1px solid #000;transform:translate(-50%,-50%) rotate(${player.yaw}rad);left:${50 + player.pos.x*0.9}%;top:${50 - player.pos.z*0.9}%"><div style="width:0;height:0;border-left:3px solid transparent;border-right:3px solid transparent;border-bottom:5px solid #ffd84d;position:absolute;left:50%;top:-3px;transform:translateX(-50%)"></div></div>
+          <div style="position:absolute;left:${50+22*0.9}%;top:${50-0*0.9}%;width:10px;height:10px;background:#8a9aa8;border:1px solid #fff;transform:translate(-50%,-50%)" title="OBS"></div>
+          <div style="position:absolute;left:${50+18*0.9}%;top:${50+16*0.9}%;width:7px;height:7px;background:#3a4a3a;border:1px solid #2ecc71;transform:translate(-50%,-50%);opacity:${generatorRepaired?1:0.5}"></div>
+          <div style="position:absolute;left:${50-6*0.9}%;top:${50-22*0.9}%;width:6px;height:6px;background:#4a8ac8;transform:translate(-50%,-50%)"></div>
+          <div style="position:absolute;left:${50+2*0.9}%;top:${50+24*0.9}%;width:6px;height:6px;background:#c0392b;transform:translate(-50%,-50%)"></div>
+          <div style="position:absolute;left:${50-14*0.9}%;top:${50+8*0.9}%;width:6px;height:6px;background:#7a6a3a;transform:translate(-50%,-50%)"></div>
+          ${tapes.map((t,i)=> t.collected?'':`<div style="position:absolute;left:${50+t.pos.x*0.9}%;top:${50-t.pos.z*0.9}%;width:5px;height:5px;background:${['#e85d5d','#5da6e8','#7ad67a','#e8c55d'][i]};border-radius:50%;box-shadow:0 0 4px currentColor;transform:translate(-50%,-50%)"></div>`).join('')}
+          ${!hasKey?`<div style="position:absolute;left:${50-16.2*0.9}%;top:${50+8.8*0.9}%;width:5px;height:5px;background:#d4b024;transform:translate(-50%,-50%) rotate(45deg)"></div>`:''}
+          ${!hasFuse?`<div style="position:absolute;left:${50-7.6*0.9}%;top:${50-21.2*0.9}%;width:5px;height:5px;background:#4a8ac8;transform:translate(-50%,-50%)"></div>`:''}
+          ${!hasFuel?`<div style="position:absolute;left:${50+3.8*0.9}%;top:${50+24.6*0.9}%;width:5px;height:5px;background:#c0392b;transform:translate(-50%,-50%)"></div>`:''}
+          ${batteries.map(b=> b.visible?`<div style="position:absolute;left:${50+b.position.x*0.9}%;top:${50-b.position.z*0.9}%;width:4px;height:4px;background:#2ecc71;border-radius:50%;transform:translate(-50%,-50%)"></div>`:'').join('')}
+          <div style="position:absolute;left:${50+entityGroup.position.x*0.9}%;top:${50-entityGroup.position.z*0.9}%;width:4px;height:4px;background:#ff2222;border-radius:50%;opacity:${proximity>0.35?0.9:0.28};box-shadow:0 0 6px #ff2222;transform:translate(-50%,-50%)"></div>
+        </div>
+        <div style="font-size:7px;color:#555;margin-top:4px;line-height:1.4">YELLOW=KEY BLUE=FUSE RED=FUEL GREEN=BAT • TAPES=COLORED DOTS<br>▲ YOU • RED DOT=LISTENER ${proximity>0.5?'[NEAR!]':''}</div>
+        <div style="font-size:7px;color:#6ab0ff;margin-top:2px">${hasKey?'[KEY]':''} ${hasFuse?'[FUSE]':''} ${hasFuel?'[FUEL]':''} ${generatorRepaired?'GEN-ON':'GEN-OFF'} ${doorUnlocked?'DOOR-OPEN':''}</div>
+      `
+      uiLayer.appendChild(mapEl)
+    }
     return
   }
   if(state==='tape'){
@@ -299,6 +354,32 @@ function renderUI(){
     `
     box.addEventListener('click', advanceDialogue)
     uiLayer.appendChild(box)
+    return
+  }
+  if(state==='tuning'){
+    const diff = Math.abs(radioFreq - 147.7)
+    const close = diff < 0.6
+    const perfect = diff < 0.15
+    uiLayer.innerHTML = '' // clear HUD for tuning overlay
+    const tune = document.createElement('div'); tune.className='menu-screen'
+    tune.style.background='rgba(4,4,8,0.92)'
+    tune.innerHTML=`
+      <div style="width:520px;max-width:92vw;background:#0a0a0e;border:1px solid #333;border-top:2px solid ${perfect?'#2ecc71': close?'#d4b024':'#c44'};padding:18px">
+        <div style="font-size:10px;letter-spacing:0.2em;color:${perfect?'#2ecc71':'#c44'}">TRANSMITTER // FREQUENCY CALIBRATION</div>
+        <div style="font-family:VT323,monospace;font-size:44px;color:${perfect?'#7aff8a':close?'#ffe066':'#e8e8e8'};letter-spacing:0.08em;margin:10px 0">${radioFreq.toFixed(1)} <span style="font-size:18px;color:#888">MHz</span></div>
+        <div style="height:18px;background:#111;border:1px solid #333;position:relative;overflow:hidden;margin:8px 0">
+          <div style="position:absolute;left:0;top:0;bottom:0;width:${((radioFreq-100)/60)*100}%;background:${perfect?'#2ecc71':close?'#d4b024':'#c44'};box-shadow:0 0 8px ${perfect?'rgba(46,204,113,0.4)':'rgba(196,68,68,0.3)'}"></div>
+          <div style="position:absolute;left:${((147.7-100)/60)*100}%;top:0;bottom:0;width:2px;background:#fff;box-shadow:0 0 4px #fff"></div>
+          <div style="position:absolute;left:${((147.7-100)/60)*100 - 2}%;top:-2px;font-size:8px;color:#fff">▲ 147.7</div>
+        </div>
+        <div style="font-size:10px;color:#666;letter-spacing:0.1em">HOLD <b style="color:#aaa">A/D</b> TO TUNE • <b style="color:#aaa">ENTER</b> TO TRANSMIT ${perfect?'<span style="color:#2ecc71">● LOCKED</span>': close?'<span style="color:#d4b024">◐ CLOSE</span>':'<span style="color:#c44">○ SEARCHING</span>'} • <b style="color:#aaa">ESC</b> CANCEL</div>
+        <div style="margin-top:12px;height:2px;background:${perfect?'#2ecc71':'#333'};box-shadow:0 0 6px ${perfect?'#2ecc71':'transparent'}"></div>
+        <div style="font-size:9px;color:#555;margin-top:8px">STATIC: ${Math.floor((1 - Math.min(1, diff/30))*100)}% • SIGNAL: ${perfect?'STRONG':close?'WEAK':'NO LOCK'}</div>
+      </div>
+      <div style="margin-top:14px;font-size:9px;color:#444">TIP: THE LISTENER HUNTS WHILE YOU TUNE — KEEP TAPS SHORT</div>
+    `
+    uiLayer.appendChild(tune)
+    uiLayer.className='ui-layer interactive'
     return
   }
   if(state==='won'){
@@ -373,8 +454,20 @@ function startGame(){
   player.yaw = -0.18
   player.stamina = 1
   invuln=0
+  flashlightBattery=1.0
+  batteriesCollected=0
+  hasKey=false; hasFuse=false; hasFuel=false; generatorRepaired=false; doorUnlocked=false; radioFreq=100.0; tuning=false; tuningHold=0; showMap=false; objectivePulse=0
   tapes.forEach(t=>{ t.collected=false; t.mesh.visible=true; t.mesh.scale.set(1,1,1) })
   tapesCollected=0
+  // reset world items
+  keyGroup.visible=true; fuseGroup.visible=true; fuelGroup.visible=true
+  batteries.forEach(b=> b.visible=true)
+  doorGroup.visible=true
+  // door mesh reset
+  const dm = doorGroup.userData.mesh as THREE.Mesh; if(dm) dm.visible=true
+  const lk = doorGroup.userData.lock as THREE.Mesh; if(lk) lk.visible=true
+  // generator light
+  const gl = genGroup.userData.light as THREE.Mesh; if(gl) (gl.material as THREE.MeshBasicMaterial).color.setHex(0x442222)
   entityPos.set(38,0,-8)
   entityGroup.position.copy(entityPos)
   entityState='patrol'
@@ -384,10 +477,8 @@ function startGame(){
   txGroup.userData.activated=false
   ;(txGroup.userData.light.material as THREE.MeshBasicMaterial).color.setHex(0x30ff30)
   state='playing'
-  // reset fog intensity
   scene.fog = new THREE.Fog(0x9aa8b8, 18, 72)
   renderUI()
-  // focus
   renderer.domElement.focus()
 }
 
@@ -407,33 +498,119 @@ window.addEventListener('keydown', e=>{
     }
   } else if(state==='tape'){
     if(k==='keye'||k==='enter'||k==='space') advanceDialogue()
+  } else if(state==='tuning'){
+    if(k==='escape'){ state='playing'; tuning=false; renderUI() }
+    if(k==='enter'||k==='space'){
+      const diff = Math.abs(radioFreq - 147.7)
+      if(diff < 0.25){
+        // success
+        txGroup.userData.activated=true
+        audio.playTone(660,1.2,'sine',0.32)
+        setTimeout(()=> audio.playTone(880,1.5,'sine',0.32), 300)
+        wonTimer=0.1
+        state='playing'; tuning=false; renderUI()
+      } else {
+        audio.playStatic()
+        dialogueQueue=[{title:'TRANSMITTER — NO LOCK', text:`FREQUENCY ${radioFreq.toFixed(1)} MHz OUT OF TOLERANCE. TARGET IS 147.7 MHz. ADJUST AND RETRY.`}]
+        dialogueIndex=0; state='tape'; tuning=false; renderUI()
+      }
+    }
+    if(k==='keya'||k==='arrowleft') radioFreq = Math.max(100, radioFreq - 0.7)
+    if(k==='keyd'||k==='arrowright') radioFreq = Math.min(160, radioFreq + 0.7)
   } else if(state==='playing'){
     if(k==='escape'||k==='keyp'){ state='paused'; renderUI() }
-    if(k==='keyf'){ flashlightOn=!flashlightOn; audio.playTone(420,0.08,'square',0.18); renderUI() }
-    if(k==='keym'){ if(audio.master) audio.master.gain.value = audio.master.gain.value>0?0:0.45 }
+    if(k==='keyf'){ 
+      if(flashlightBattery<=0.02){ audio.playTone(120,0.12,'square',0.12); dialogueQueue=[{title:'FLASHLIGHT — BATTERY DEAD', text:'BATTERY DEPLETED. FIND GREEN BATTERIES SCATTERED AROUND THE COMPOUND.'}]; dialogueIndex=0; state='tape'; renderUI(); return }
+      flashlightOn=!flashlightOn; audio.playTone(420,0.08,'square',0.18); renderUI() 
+    }
+    if(k==='keym' && !e.shiftKey){ if(audio.master) audio.master.gain.value = audio.master.gain.value>0?0:0.45 }
+    if(k==='tab'){ e.preventDefault(); if(state==='playing'){ showMap=!showMap; renderUI() } }
+    if(k==='keyq'){ if(state==='playing'){ showMap=!showMap; renderUI() } }
     if(k==='keye'){
-      // interact: tape or transmitter
-      // check tapes
+      // Priority: tapes
       for(let i=0;i<tapes.length;i++){
         const t = tapes[i]
         if(t.collected) continue
         if(player.pos.distanceTo(t.pos) < 2.1){
           t.collected=true; t.mesh.visible=false; tapesCollected++
           showTapeDialogue(i)
+          objectivePulse=1.2
           return
         }
       }
-      // transmitter
-      const txPos = txGroup.position
-      if(tapesCollected>=4 && player.pos.distanceTo(txPos) < 2.6){
-        txGroup.userData.activated=true
-        audio.playTone(660,1.2,'sine',0.32)
-        setTimeout(()=> audio.playTone(880,1.5,'sine',0.32), 300)
-        wonTimer=0.1
-      } else if(tapesCollected<4 && player.pos.distanceTo(txPos) < 2.6){
-        dialogueQueue=[{title:'TRANSMITTER — OFFLINE', text:`NEED ${4-tapesCollected} MORE TAPE(S) TO RECALIBRATE FREQUENCY. CHECK THE SHEDS AND TOWER.`}]
-        dialogueIndex=0; state='tape'; renderUI()
+      // Key
+      if(!hasKey && player.pos.distanceTo(keyGroup.position) < 2.0){
+        hasKey=true; keyGroup.visible=false; audio.playPickup()
+        dialogueQueue=[{title:'ITEM — RUSTY KEY', text:'RUSTED OBSERVATORY KEY — STAMPED “NORTHLIGHT 1987”. OPENS THE FRONT DOOR.'}]
+        dialogueIndex=0; state='tape'; objectivePulse=1.2; renderUI(); return
       }
+      // Fuse
+      if(!hasFuse && player.pos.distanceTo(fuseGroup.position) < 2.0){
+        hasFuse=true; fuseGroup.visible=false; audio.playPickup()
+        dialogueQueue=[{title:'ITEM — CERAMIC FUSE 30A', text:'BLOWN FUSE FOR THE GENERATOR. NEED THIS + FUEL TO RESTORE POWER.'}]
+        dialogueIndex=0; state='tape'; objectivePulse=1.2; renderUI(); return
+      }
+      // Fuel
+      if(!hasFuel && player.pos.distanceTo(fuelGroup.position) < 2.0){
+        hasFuel=true; fuelGroup.visible=false; audio.playPickup()
+        dialogueQueue=[{title:'ITEM — FUEL CAN', text:'HALF-FULL DIESEL CAN. HEAVY. FOR THE SHED GENERATOR.'}]
+        dialogueIndex=0; state='tape'; objectivePulse=1.2; renderUI(); return
+      }
+      // Batteries
+      for(let i=0;i<batteries.length;i++){
+        const bg = batteries[i]
+        if(!bg.visible) continue
+        if(player.pos.distanceTo(bg.position) < 1.9){
+          bg.visible=false; batteriesCollected++; flashlightBattery = Math.min(1, flashlightBattery + 0.42); audio.playPickup()
+          dialogueQueue=[{title:'ITEM — BATTERY', text:`FLASHLIGHT BATTERY +42% → ${Math.floor(flashlightBattery*100)}%.`}]
+          dialogueIndex=0; state='tape'; renderUI(); return
+        }
+      }
+      // Generator
+      if(player.pos.distanceTo(genGroup.position) < 2.4){
+        if(generatorRepaired){
+          dialogueQueue=[{title:'GENERATOR — ONLINE', text:'ENGINE HUMS AT 60Hz. POWER RESTORED TO OBSERVATORY. LIGHTS ARE ON.'}]
+          dialogueIndex=0; state='tape'; renderUI(); return
+        }
+        if(hasFuse && hasFuel){
+          generatorRepaired=true; hasFuse=false; hasFuel=false
+          const gl = genGroup.userData.light as THREE.Mesh; (gl.material as THREE.MeshBasicMaterial).color.setHex(0x2ecc71)
+          audio.playTone(180,0.6,'square',0.32); setTimeout(()=>audio.playTone(360,0.8,'square',0.28), 250)
+          dialogueQueue=[{title:'GENERATOR — REPAIRED', text:'FUSE SEATED. FUEL PRIMED. THE GENERATOR ROARS TO LIFE. OBSERVATORY POWER IS RESTORED — DOOR AND TRANSMITTER NOW HAVE POWER.'}]
+          dialogueIndex=0; state='tape'; objectivePulse=1.5; renderUI(); return
+        } else {
+          let need = []
+          if(!hasFuse) need.push('FUSE [TOWER]')
+          if(!hasFuel) need.push('FUEL [BUNKER]')
+          dialogueQueue=[{title:'GENERATOR — OFFLINE', text:`GENERATOR DEAD. NEED: ${need.join(' + ')}. FIND THEM AND RETURN.`}]
+          dialogueIndex=0; state='tape'; renderUI(); return
+        }
+      }
+      // Door
+      if(!doorUnlocked && player.pos.distanceTo(doorGroup.position) < 2.2){
+        if(hasKey){
+          doorUnlocked=true
+          doorGroup.visible=false
+          // remove collider for door (first collider)
+          audio.playTone(540,0.35,'square',0.28)
+          dialogueQueue=[{title:'DOOR — UNLOCKED', text:'KEY TURNS WITH A SCREECH. HEAVY DOOR CREAKS OPEN. TRANSMITTER IS INSIDE.'}]
+          dialogueIndex=0; state='tape'; objectivePulse=1.2; renderUI(); return
+        } else {
+          dialogueQueue=[{title:'DOOR — LOCKED', text:'OBSERVATORY DOOR PADLOCKED. NEED KEY FROM GARAGE.'}]
+          dialogueIndex=0; state='tape'; renderUI(); return
+        }
+      }
+      // Transmitter
+      const txPos = txGroup.position
+      if(player.pos.distanceTo(txPos) < 2.6){
+        if(!doorUnlocked){ dialogueQueue=[{title:'TRANSMITTER — BLOCKED', text:'TRANSMITTER INSIDE LOCKED OBSERVATORY. FIND KEY FIRST.'}]; dialogueIndex=0; state='tape'; renderUI(); return }
+        if(!generatorRepaired){ dialogueQueue=[{title:'TRANSMITTER — NO POWER', text:'NO POWER. REPAIR GENERATOR AT SHED FIRST (NEEDS FUSE + FUEL).'}]; dialogueIndex=0; state='tape'; renderUI(); return }
+        if(tapesCollected<4){ dialogueQueue=[{title:'TRANSMITTER — NEED TAPES', text:`NEED ${4-tapesCollected} MORE TAPE(S) TO RECALIBRATE. CHECK MAP MARKERS.`}]; dialogueIndex=0; state='tape'; renderUI(); return }
+        // Enter tuning mode
+        state='tuning'; tuning=true; renderUI(); return
+      }
+      // Nothing nearby
+      audio.playTone(100,0.08,'square',0.08)
     }
   } else if(state==='paused'){
     if(k==='escape'){ state='playing'; renderUI() }
@@ -512,7 +689,53 @@ function animate(){
     }
   })
 
+  // Tuning state: radio dial moves with A/D, entity still hunts slowly
+  if(state==='tuning'){
+    const turn = (input.isDown('keya')||input.isDown('arrowleft')?-1:0) + (input.isDown('keyd')||input.isDown('arrowright')?1:0)
+    if(turn!==0){
+      radioFreq = THREE.MathUtils.clamp(radioFreq + turn * dt * 6.5, 100, 160)
+      // tune sound
+      if(Math.random()<0.28) audio.playTone(200 + (radioFreq-100)*8, 0.06,'square',0.06)
+    }
+    // Entity still approaches slowly while tuning (tension)
+    const distToPlayer = entityGroup.position.distanceTo(player.pos)
+    proximity = THREE.MathUtils.clamp(1 - distToPlayer/22, 0, 1)
+    if(entityStun<=0){
+      const dir = player.pos.clone().sub(entityGroup.position); dir.y=0; dir.normalize()
+      entityGroup.position.add(dir.multiplyScalar(0.9*dt))
+      entityGroup.lookAt(player.pos.x, entityGroup.position.y, player.pos.z)
+    } else entityStun-=dt
+    if(distToPlayer < 1.15){ audio.playHurt(); state='lost'; tuning=false; renderUI() }
+  }
+
   if(state==='playing'){
+    // Battery drain while flashlight on
+    if(flashlightOn && flashlightBattery>0){
+      flashlightBattery = Math.max(0, flashlightBattery - dt * 0.032)
+      if(flashlightBattery<=0){ flashlightOn=false; objectivePulse=1.0; renderUI() }
+    }
+    objectivePulse = Math.max(0, objectivePulse - dt)
+    // Pulse HUD when objective changes
+    // Animate world pickups (key, fuse, fuel, batteries) hover
+    ;[keyGroup, fuseGroup, fuelGroup].forEach(g=>{
+      if(!g.visible) return
+      g.position.y = g.userData.pos.y + Math.sin(time*1.5 + g.position.x)*0.08
+      g.rotation.y += dt*0.55
+      g.children.forEach((c:any)=>{ if(c.userData.isArrow) c.position.y = 0.95 + Math.sin(time*2.4)*0.07 })
+    })
+    batteries.forEach(bg=>{
+      if(!bg.visible) return
+      bg.position.y = bg.userData.pos.y + Math.sin(time*1.7 + bg.position.x*0.5)*0.06
+      bg.rotation.y += dt*0.6
+      bg.children.forEach((c:any)=>{ if(c.userData.isArrow) c.position.y = 0.65 + Math.sin(time*2.6)*0.06 })
+    })
+    // Generator lever animation when repaired
+    if(generatorRepaired){
+      const lv = genGroup.userData.lever as THREE.Mesh
+      if(lv) lv.rotation.x = THREE.MathUtils.lerp(lv.rotation.x, -Math.PI*0.15, dt*2.5)
+      const gl = genGroup.userData.light as THREE.Mesh
+      if(gl) (gl.material as THREE.MeshBasicMaterial).color.setHex(Math.floor(time*6)%2===0?0x2ecc71:0x27ae60)
+    }
     // Player movement - tank controls
     const axis = input.getAxis() // x = turn, y = forward
     const isRun = input.isDown('shiftleft') || input.isDown('shiftright') || input.isDown('gamepad')
@@ -688,23 +911,40 @@ function animate(){
       camPos.y = camHeight
     }
   }
-  camera.position.lerp(camPos, state==='playing' ? 0.14 : 0.04)
+  // Smooth follow with PS1-style micro-jitter (much subtler to avoid screen tearing)
+  camera.position.lerp(camPos, state==='playing' ? 0.10 : 0.04)
   const lookAt = player.pos.clone().add(new THREE.Vector3(0,1.02,0))
   camera.lookAt(lookAt)
-  // Subtle PS1 camera jitter (quantized)
-  camera.position.x = Math.round(camera.position.x*64)/64
-  camera.position.y = Math.round(camera.position.y*64)/64
-  camera.position.z = Math.round(camera.position.z*64)/64
+  // Very subtle sub-pixel jitter for CRT feel - 1/256 instead of 1/64 to avoid tearing
+  // Keep lookAt stable to prevent whole-screen tear lines
+  if(state==='playing' && proximity < 0.6){
+    camera.position.x += (Math.random()-0.5)*0.004
+    camera.position.y += (Math.random()-0.5)*0.004
+  }
 
-  // Flashlight follows camera/player
+  // Flashlight follows camera/player - battery affects intensity
   flash.position.copy(player.pos).add(new THREE.Vector3(0,1.18,0))
   flash.position.add(new THREE.Vector3(Math.sin(player.yaw)*0.22,0,Math.cos(player.yaw)*0.22))
   const flashTarget = player.pos.clone().add(new THREE.Vector3(Math.sin(player.yaw)*12, -0.35, Math.cos(player.yaw)*12))
   flash.target.position.copy(flashTarget)
-  flash.intensity = flashlightOn ? (state==='playing'? 4.6:1.2) : 0
-  // flicker when low tapes?
+  const batFactor = THREE.MathUtils.clamp(flashlightBattery*1.35, 0, 1)
+  flash.intensity = (flashlightOn && flashlightBattery>0) ? (state==='playing'? 4.8*batFactor : 1.2*batFactor) : 0
   if(flashlightOn && proximity>0.5){
     flash.intensity *= 0.86 + Math.random()*0.28
+  }
+  // Battery flicker when low
+  if(flashlightOn && flashlightBattery<0.22){
+    flash.intensity *= 0.55 + Math.random()*0.55
+  }
+  // Observatory windows glow when generator repaired
+  if(generatorRepaired){
+    // Find window meshes (basic material emissive via opacity)
+    scene.traverse((obj:any)=>{
+      if(obj.isMesh && obj.material && obj.userData.flicker!==undefined){
+        obj.material.opacity = 0.72 + Math.sin(time*3.1 + obj.userData.flicker)*0.18
+        obj.material.color.setHex(0xffd68a)
+      }
+    })
   }
 
   // Shadow under player
