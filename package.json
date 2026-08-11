@@ -1,0 +1,21 @@
+{
+  "name": "hollow-peak-psx",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "HOLLOW PEAK — A PSX-Style Survival Exploration Game (Winter 1998)",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "three": "^0.160.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.185.4",
+    "typescript": "^5.4.5",
+    "vite": "^5.2.8"
+  }
+}

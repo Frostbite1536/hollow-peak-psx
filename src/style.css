@@ -1,0 +1,389 @@
+@import url('https://fonts.googleapis.com/css2?family=VT323&family=Share+Tech+Mono&family=IBM+Plex+Mono:wght@400;600&display=swap');
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  width: 100%; height: 100%;
+  overflow: hidden;
+  background: #050507;
+  font-family: 'Share Tech Mono', monospace;
+  color: #d0d0d0;
+  user-select: none;
+}
+
+#app {
+  width: 100vw; height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(ellipse at center, #1a1a1f 0%, #050507 70%);
+}
+
+#game-container {
+  position: relative;
+  width: 100vw; height: 100vh;
+  overflow: hidden;
+  background: #000;
+}
+
+/* Low-res canvas will be centered and scaled */
+#game-canvas {
+  display: block;
+  width: 100%; height: 100%;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+/* CRT overlay */
+.crt-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(rgba(18,16,16,0) 50%, rgba(0,0,0,0.15) 50%),
+    linear-gradient(90deg, rgba(255,0,0,0.03), rgba(0,255,0,0.01), rgba(0,0,255,0.03));
+  background-size: 100% 3px, 3px 100%;
+  z-index: 10;
+}
+
+.crt-vignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, transparent 60%, rgba(0,0,0,0.65) 100%);
+  z-index: 11;
+}
+
+.crt-flicker {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: rgba(255,255,255,0.015);
+  opacity: 0;
+  z-index: 12;
+  animation: flicker 0.15s infinite;
+}
+
+@keyframes flicker {
+  0% { opacity: 0.02; }
+  50% { opacity: 0; }
+  100% { opacity: 0.015; }
+}
+
+/* UI Layers */
+.ui-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  pointer-events: none;
+}
+
+.ui-layer.interactive { pointer-events: auto; }
+
+/* BIOS BOOT */
+.bios-screen {
+  position: absolute;
+  inset: 0;
+  background: #0a0a0e;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  font-family: 'VT323', monospace;
+}
+
+.bios-logo {
+  font-size: 48px;
+  letter-spacing: 0.3em;
+  color: #e0e0e0;
+  text-shadow: 0 0 8px rgba(255,255,255,0.3);
+  margin-bottom: 8px;
+}
+
+.bios-sub {
+  font-size: 14px;
+  letter-spacing: 0.2em;
+  color: #888;
+  margin-bottom: 40px;
+}
+
+.bios-diamond {
+  width: 64px; height: 64px;
+  border: 2px solid #c44;
+  transform: rotate(45deg);
+  display: grid;
+  place-items: center;
+  margin-bottom: 40px;
+  animation: biosPulse 2s ease-in-out infinite;
+}
+
+.bios-diamond span {
+  transform: rotate(-45deg);
+  font-size: 28px;
+  color: #c44;
+}
+
+@keyframes biosPulse {
+  0%,100% { border-color: #c44; box-shadow: 0 0 10px rgba(204,68,68,0.2); }
+  50% { border-color: #e66; box-shadow: 0 0 20px rgba(204,68,68,0.4); }
+}
+
+.bios-text {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: #666;
+  line-height: 1.8;
+  text-align: center;
+}
+
+.bios-prompt {
+  margin-top: 40px;
+  font-size: 12px;
+  color: #aaa;
+  letter-spacing: 0.15em;
+  animation: blink 1s steps(1) infinite;
+}
+
+@keyframes blink { 0%,50% { opacity: 1; } 51%,100% { opacity: 0; } }
+
+/* HUD */
+.hud {
+  position: absolute;
+  inset: 0;
+  padding: 14px 18px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+
+.hud-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.hud-tapes {
+  display: flex;
+  gap: 6px;
+}
+
+.tape-icon {
+  width: 28px; height: 18px;
+  border: 1px solid #444;
+  background: #111;
+  display: grid;
+  place-items: center;
+  font-size: 9px;
+  color: #333;
+  position: relative;
+}
+
+.tape-icon.collected {
+  border-color: #c44;
+  background: #1a0f0f;
+  color: #e66;
+  box-shadow: 0 0 6px rgba(204,68,68,0.3);
+}
+
+.tape-icon.collected::after {
+  content: '●';
+  position: absolute;
+  top: -4px; right: -4px;
+  font-size: 7px;
+  color: #e33;
+}
+
+.hud-signal {
+  text-align: right;
+  line-height: 1.6;
+}
+
+.signal-bar {
+  width: 80px; height: 6px;
+  background: #111;
+  border: 1px solid #333;
+  margin-top: 4px;
+  position: relative;
+  overflow: hidden;
+}
+
+.signal-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #c44, #e88);
+  width: 0%;
+  transition: width 0.3s;
+}
+
+.hud-bottom {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+}
+
+.hud-controls {
+  font-size: 9px;
+  color: #555;
+  line-height: 1.8;
+}
+
+.hud-controls b { color: #777; }
+
+.stamina-bar {
+  width: 100px; height: 4px;
+  background: #111;
+  border: 1px solid #222;
+  margin-top: 6px;
+}
+
+.stamina-fill {
+  height: 100%;
+  background: #6a6;
+  width: 100%;
+  transition: width 0.1s;
+}
+
+.compass {
+  font-size: 10px;
+  color: #666;
+  letter-spacing: 0.2em;
+}
+
+/* Dialogue / Tape */
+.dialogue-box {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(520px, 90vw);
+  background: rgba(10,10,14,0.92);
+  border: 1px solid #333;
+  border-top: 2px solid #c44;
+  padding: 14px 16px;
+  font-size: 11px;
+  line-height: 1.7;
+  color: #ccc;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.8);
+}
+
+.dialogue-header {
+  font-size: 9px;
+  color: #c44;
+  letter-spacing: 0.2em;
+  margin-bottom: 6px;
+  display: flex;
+  justify-content: space-between;
+}
+
+.dialogue-text { color: #ddd; }
+.dialogue-prompt {
+  margin-top: 8px;
+  text-align: right;
+  font-size: 9px;
+  color: #666;
+  animation: blink 1s steps(1) infinite;
+}
+
+/* Pause / Menu */
+.menu-screen {
+  position: absolute;
+  inset: 0;
+  background: rgba(5,5,7,0.92);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+
+.menu-title {
+  font-family: 'VT323', monospace;
+  font-size: 42px;
+  letter-spacing: 0.2em;
+  color: #e0e0e0;
+  margin-bottom: 4px;
+}
+
+.menu-subtitle {
+  font-size: 10px;
+  letter-spacing: 0.3em;
+  color: #666;
+  margin-bottom: 36px;
+}
+
+.menu-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 240px;
+}
+
+.menu-btn {
+  width: 100%;
+  padding: 10px 16px;
+  background: #111;
+  border: 1px solid #333;
+  color: #999;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  cursor: pointer;
+  text-align: left;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  transition: all 0.1s;
+}
+
+.menu-btn:hover, .menu-btn:focus {
+  background: #1a1a1a;
+  border-color: #555;
+  color: #eee;
+  outline: none;
+}
+
+.menu-btn.active {
+  background: #1f1414;
+  border-color: #c44;
+  color: #e88;
+}
+
+.menu-btn.active::before {
+  content: '▶';
+  font-size: 8px;
+}
+
+.menu-footer {
+  margin-top: 28px;
+  font-size: 9px;
+  color: #444;
+  text-align: center;
+  line-height: 1.8;
+}
+
+/* Game Over */
+.gameover-title {
+  font-family: 'VT323', monospace;
+  font-size: 56px;
+  letter-spacing: 0.15em;
+  color: #c44;
+  text-shadow: 0 0 12px rgba(204,68,68,0.4);
+  margin-bottom: 12px;
+}
+
+.noise {
+  position: absolute;
+  inset: 0;
+  opacity: 0.035;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+  z-index: 13;
+}
+
+/* Responsive */
+@media (max-width: 600px) {
+  .hud { padding: 10px 12px; }
+  .bios-logo { font-size: 32px; }
+}
