@@ -30,6 +30,39 @@ const noise = document.createElement('div'); noise.className='noise'; container.
 
 const uiLayer = document.createElement('div'); uiLayer.className='ui-layer'; container.appendChild(uiLayer)
 
+// Touch controls for mobile
+const isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints||0)>0
+const touch = { f:0, b:0, l:0, r:0, run:0, interact:0, light:0, map:0 }
+let touchLayer: HTMLDivElement | null = null
+if(isTouch){
+  touchLayer = document.createElement('div')
+  touchLayer.id='touch-controls'
+  touchLayer.innerHTML=`
+    <div class="touch-stick" id="touch-move">
+      <div class="touch-btn" data-k="f">▲</div>
+      <div style="display:flex;gap:8px"><div class="touch-btn" data-k="l">◀</div><div class="touch-btn" data-k="b">▼</div><div class="touch-btn" data-k="r">▶</div></div>
+    </div>
+    <div class="touch-actions">
+      <div class="touch-btn touch-run" data-k="run">RUN</div>
+      <div class="touch-btn touch-act" data-k="interact">E</div>
+      <div class="touch-btn" data-k="light">☀</div>
+      <div class="touch-btn" data-k="map">MAP</div>
+    </div>
+  `
+  container.appendChild(touchLayer)
+  const bind = (el: Element, k:string, v: number)=>{
+    const set = (on:boolean)=>{ (touch as any)[k]= on?1:0 }
+    el.addEventListener('touchstart', e=>{ e.preventDefault(); set(true) }, {passive:false})
+    el.addEventListener('touchend', e=>{ e.preventDefault(); set(false) }, {passive:false})
+    el.addEventListener('touchcancel', e=>{ e.preventDefault(); set(false) }, {passive:false})
+    el.addEventListener('mousedown', ()=> set(true))
+    el.addEventListener('mouseup', ()=> set(false))
+    el.addEventListener('mouseleave', ()=> set(false))
+  }
+  touchLayer.querySelectorAll('[data-k]').forEach(el=> bind(el, el.getAttribute('data-k')!, 1))
+  // map light to actual actions via polling
+}
+
 // Scene
 const scene = new THREE.Scene()
 const camera = new THREE.PerspectiveCamera(58, PSX_WIDTH/PSX_HEIGHT, 0.1, 100)
@@ -76,7 +109,7 @@ crtScene.add(crtQuad)
 
 // PSX materials collection
 const psxMaterials: THREE.Material[] = []
-const { tapes, colliders, dishGroup, towerLight, txGroup, doorGroup, genGroup, keyGroup, fuseGroup, fuelGroup, batteries } = createWorld(scene, psxMaterials)
+const { tapes, colliders, dishGroup, towerLight, txGroup, doorGroup, genGroup, keyGroup, fuseGroup, fuelGroup, batteries, interiorGroup, snowfall, snowGeo, snowPos, snowVel } = createWorld(scene, psxMaterials)
 
 // Player
 const player = {
@@ -162,6 +195,34 @@ let invuln = 0
 let wonTimer = 0
 let showMap = false
 let objectivePulse = 0
+const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+let difficulty: 'easy'|'normal'|'hard' = (localStorage.getItem('hp_difficulty') as any) || 'normal'
+let autoSaveTimer = 0
+
+function saveGame(){
+  try{
+    const data = { tapesCollected, hasKey, hasFuse, hasFuel, generatorRepaired, doorUnlocked, batteriesCollected, flashlightBattery, radioFreq, playerPos: player.pos.toArray(), playerYaw: player.yaw, tapes: tapes.map(t=>t.collected), batteries: batteries.map(b=>!b.visible) }
+    localStorage.setItem('hp_save_v2', JSON.stringify(data))
+  }catch{}
+}
+function loadGame():boolean{
+  try{
+    const raw = localStorage.getItem('hp_save_v2')
+    if(!raw) return false
+    const d = JSON.parse(raw)
+    tapesCollected = d.tapesCollected||0; hasKey=!!d.hasKey; hasFuse=!!d.hasFuse; hasFuel=!!d.hasFuel; generatorRepaired=!!d.generatorRepaired; doorUnlocked=!!d.doorUnlocked; batteriesCollected=d.batteriesCollected||0; flashlightBattery=d.flashlightBattery||1; radioFreq=d.radioFreq||100
+    if(d.playerPos) player.pos.fromArray(d.playerPos); if(d.playerYaw) player.yaw=d.playerYaw
+    if(d.tapes) tapes.forEach((t,i)=>{ t.collected=!!d.tapes[i]; t.mesh.visible=!t.collected; if(t.collected) tapesCollected++ })
+    // fix double count - we already set tapesCollected, but need accurate
+    tapesCollected = tapes.filter(t=>t.collected).length
+    if(d.batteries) batteries.forEach((b,i)=>{ if(d.batteries[i]) b.visible=false })
+    keyGroup.visible=!hasKey; fuseGroup.visible=!hasFuse; fuelGroup.visible=!hasFuel
+    if(doorUnlocked) doorGroup.visible=false
+    if(generatorRepaired){ const gl = genGroup.userData.light as THREE.Mesh; (gl.material as THREE.MeshBasicMaterial).color.setHex(0x2ecc71) }
+    return true
+  }catch{ return false }
+}
+function clearSave(){ localStorage.removeItem('hp_save_v2') }
 
 // Flashlight
 const flash = new THREE.SpotLight(0xfff4c8, 4.2, 22, Math.PI*0.31, 0.5, 1.8)
@@ -216,8 +277,9 @@ function renderUI(){
     return
   }
   if(state==='title'){
+    const hasSave = !!localStorage.getItem('hp_save_v2')
     const menu = document.createElement('div'); menu.className='menu-screen'
-    const title = tapesCollected>0 ? 'HOLLOW PEAK' : 'HOLLOW PEAK'
+    const title = 'HOLLOW PEAK'
     menu.innerHTML = `
       <div class="menu-title">${title}</div>
       <div class="menu-subtitle">WINTER 1998 — THE SIGNAL WENT DARK</div>
@@ -225,15 +287,15 @@ function renderUI(){
       <div class="menu-footer">
         TANK CONTROLS: W/S MOVE • A/D TURN • SHIFT RUN • E INTERACT • TAB MAP • F FLASHLIGHT<br>
         KEY→FUSE→FUEL→GENERATOR→TAPES→DOOR→TUNE 147.7MHz • BATTERY DRAINS WHEN LIGHT ON<br>
-        <span style="color:#6ab0ff">PSX: 320×240 • GTE SNAP • AFFINE WARP • 15-BIT DITHER • CRT • FOG</span> &nbsp; <span style="color:#2ecc71">● MAP: TAB/Q</span>
+        <span style="color:#6ab0ff">PSX: 320×240 • GTE SNAP • AFFINE WARP • 15-BIT DITHER • CRT • SNOW</span> &nbsp; <span style="color:#2ecc71">● MAP: TAB/Q</span> ${prefersReducedMotion?'<span style="color:#ffaa44">[REDUCED MOTION]</span>':''}
       </div>
     `
     uiLayer.appendChild(menu)
     const opts = menu.querySelector('#menu-opts')!
     const options = [
-      {label:'NEW GAME', action:()=> startGame()},
-      {label:'CONTINUE', action:()=> startGame()},
-      {label:'OPTIONS', action:()=> { flashlightOn=!flashlightOn; renderUI() }},
+      {label:'NEW GAME', action:()=> { clearSave(); startGame() }},
+      {label: hasSave ? 'CONTINUE ●' : 'CONTINUE', action:()=> { if(hasSave && loadGame()){ state='playing'; renderUI(); } else startGame() }},
+      {label:`DIFFICULTY: ${difficulty.toUpperCase()}`, action:()=> { difficulty = difficulty==='easy'?'normal':difficulty==='normal'?'hard':'easy'; localStorage.setItem('hp_difficulty', difficulty); renderUI() }},
     ]
     options.forEach((o,i)=>{
       const b = document.createElement('button')
@@ -439,7 +501,7 @@ function showTapeDialogue(idx:number){
     {title:'TAPE 01 — DR. KELLER — 02.14.98', text:'“We picked up the pattern again at 03:17. Same interval. 7.4 seconds. It’s not a pulsar. It repeats our own callsign back at us, delayed. Whoever’s listening… learned our voice.”<br><br><span style="color:#666">— snow crunches under boots, wind cuts the mic —</span>'},
     {title:'TAPE 02 — TECH CHEN — 02.15.98', text:'“Generator’s failing. Temperature inside the dome dropped to -9. The dish is moving on its own. Not the motor — the whole assembly. Like something’s pulling it. Don’t look at the tree line after 22:00.”'},
     {title:'TAPE 03 — OPERATOR VOSS — 02.16.98', text:'“I saw it between the pines. Tall. Too thin. It stands where the signal is strongest. If you shine a light on it, it knows. If you run, it hears. Keep walking. Steady. Don’t—”<br><br><span style="color:#c44">[TAPE CUTS TO STATIC]</span>'},
-    {title:'TAPE 04 — FINAL ENTRY — 02.17.98', text:'“We tuned the transmitter to 147.7 to block it. The last one. If you’re hearing this, set the dish to north, restore power at the shed, and broadcast. It can’t stay where there’s noise. Good luck.”<br><br><span style="color:#6a6">→ OBJECTIVE UPDATED: ACTIVATE THE TRANSMITTER AT THE DISH (E)</span>'},
+    {title:'TAPE 04 — FINAL ENTRY — 02.17.98', text:'“We tuned the transmitter to 147.7 to block it. The last one. If you’re hearing this, set the dish to north, restore power at the shed, and broadcast. It can’t stay where there’s noise. Good luck.”<br><br><span style="color:#6a6">→ OBJECTIVE UPDATED: FIND KEY→FUSE→FUEL→GENERATOR (E)</span>'},
   ]
   dialogueQueue = [texts[idx]]
   dialogueIndex=0
@@ -447,6 +509,79 @@ function showTapeDialogue(idx:number){
   audio.playPickup()
   audio.playStatic()
   renderUI()
+}
+function doInteract(){
+  // same logic as E - extracted for touch
+  for(let i=0;i<tapes.length;i++){
+    const t = tapes[i]
+    if(t.collected) continue
+    if(player.pos.distanceTo(t.pos) < 2.1){
+      t.collected=true; t.mesh.visible=false; tapesCollected++
+      showTapeDialogue(i)
+      objectivePulse=1.2; saveGame()
+      return true
+    }
+  }
+  if(!hasKey && player.pos.distanceTo(keyGroup.position) < 2.0){
+    hasKey=true; keyGroup.visible=false; audio.playPickup()
+    dialogueQueue=[{title:'ITEM — RUSTY KEY', text:'RUSTED OBSERVATORY KEY — STAMPED “NORTHLIGHT 1987”. OPENS THE FRONT DOOR.'}]
+    dialogueIndex=0; state='tape'; objectivePulse=1.2; saveGame(); renderUI(); return true
+  }
+  if(!hasFuse && player.pos.distanceTo(fuseGroup.position) < 2.0){
+    hasFuse=true; fuseGroup.visible=false; audio.playPickup()
+    dialogueQueue=[{title:'ITEM — CERAMIC FUSE 30A', text:'BLOWN FUSE FOR THE GENERATOR. NEED THIS + FUEL TO RESTORE POWER.'}]
+    dialogueIndex=0; state='tape'; objectivePulse=1.2; saveGame(); renderUI(); return true
+  }
+  if(!hasFuel && player.pos.distanceTo(fuelGroup.position) < 2.0){
+    hasFuel=true; fuelGroup.visible=false; audio.playPickup()
+    dialogueQueue=[{title:'ITEM — FUEL CAN', text:'HALF-FULL DIESEL CAN. HEAVY. FOR THE SHED GENERATOR.'}]
+    dialogueIndex=0; state='tape'; objectivePulse=1.2; saveGame(); renderUI(); return true
+  }
+  for(let i=0;i<batteries.length;i++){
+    const bg = batteries[i]
+    if(!bg.visible) continue
+    if(player.pos.distanceTo(bg.position) < 1.9){
+      bg.visible=false; batteriesCollected++; flashlightBattery = Math.min(1, flashlightBattery + 0.42); audio.playPickup()
+      dialogueQueue=[{title:'ITEM — BATTERY', text:`FLASHLIGHT BATTERY +42% → ${Math.floor(flashlightBattery*100)}%.`}]
+      dialogueIndex=0; state='tape'; saveGame(); renderUI(); return true
+    }
+  }
+  if(player.pos.distanceTo(genGroup.position) < 2.4){
+    if(generatorRepaired){
+      dialogueQueue=[{title:'GENERATOR — ONLINE', text:'ENGINE HUMS AT 60Hz. POWER RESTORED TO OBSERVATORY. LIGHTS ARE ON.'}]
+      dialogueIndex=0; state='tape'; renderUI(); return true
+    }
+    if(hasFuse && hasFuel){
+      generatorRepaired=true; hasFuse=false; hasFuel=false
+      const gl = genGroup.userData.light as THREE.Mesh; (gl.material as THREE.MeshBasicMaterial).color.setHex(0x2ecc71)
+      audio.playTone(180,0.6,'square',0.32); setTimeout(()=>audio.playTone(360,0.8,'square',0.28), 250)
+      dialogueQueue=[{title:'GENERATOR — REPAIRED', text:'FUSE SEATED. FUEL PRIMED. THE GENERATOR ROARS TO LIFE. OBSERVATORY POWER IS RESTORED — DOOR AND TRANSMITTER NOW HAVE POWER.'}]
+      dialogueIndex=0; state='tape'; objectivePulse=1.5; saveGame(); renderUI(); return true
+    } else {
+      let need=[]; if(!hasFuse) need.push('FUSE [TOWER]'); if(!hasFuel) need.push('FUEL [BUNKER]')
+      dialogueQueue=[{title:'GENERATOR — OFFLINE', text:`GENERATOR DEAD. NEED: ${need.join(' + ')}. FIND THEM AND RETURN.`}]
+      dialogueIndex=0; state='tape'; renderUI(); return true
+    }
+  }
+  if(!doorUnlocked && player.pos.distanceTo(doorGroup.position) < 2.2){
+    if(hasKey){
+      doorUnlocked=true; doorGroup.visible=false; audio.playTone(540,0.35,'square',0.28)
+      dialogueQueue=[{title:'DOOR — UNLOCKED', text:'KEY TURNS WITH A SCREECH. HEAVY DOOR CREAKS OPEN. TRANSMITTER IS INSIDE.'}]
+      dialogueIndex=0; state='tape'; objectivePulse=1.2; saveGame(); renderUI(); return true
+    } else {
+      dialogueQueue=[{title:'DOOR — LOCKED', text:'OBSERVATORY DOOR PADLOCKED. NEED KEY FROM GARAGE.'}]
+      dialogueIndex=0; state='tape'; renderUI(); return true
+    }
+  }
+  const txPos = txGroup.position
+  if(player.pos.distanceTo(txPos) < 2.6){
+    if(!doorUnlocked){ dialogueQueue=[{title:'TRANSMITTER — BLOCKED', text:'TRANSMITTER INSIDE LOCKED OBSERVATORY. FIND KEY FIRST.'}]; dialogueIndex=0; state='tape'; renderUI(); return true }
+    if(!generatorRepaired){ dialogueQueue=[{title:'TRANSMITTER — NO POWER', text:'NO POWER. REPAIR GENERATOR AT SHED FIRST (NEEDS FUSE + FUEL).'}]; dialogueIndex=0; state='tape'; renderUI(); return true }
+    if(tapesCollected<4){ dialogueQueue=[{title:'TRANSMITTER — NEED TAPES', text:`NEED ${4-tapesCollected} MORE TAPE(S) TO RECALIBRATE. CHECK MAP MARKERS.`}]; dialogueIndex=0; state='tape'; renderUI(); return true }
+    state='tuning'; tuning=true; renderUI(); return true
+  }
+  audio.playTone(100,0.08,'square',0.08)
+  return false
 }
 
 function startGame(){
@@ -527,90 +662,7 @@ window.addEventListener('keydown', e=>{
     if(k==='tab'){ e.preventDefault(); if(state==='playing'){ showMap=!showMap; renderUI() } }
     if(k==='keyq'){ if(state==='playing'){ showMap=!showMap; renderUI() } }
     if(k==='keye'){
-      // Priority: tapes
-      for(let i=0;i<tapes.length;i++){
-        const t = tapes[i]
-        if(t.collected) continue
-        if(player.pos.distanceTo(t.pos) < 2.1){
-          t.collected=true; t.mesh.visible=false; tapesCollected++
-          showTapeDialogue(i)
-          objectivePulse=1.2
-          return
-        }
-      }
-      // Key
-      if(!hasKey && player.pos.distanceTo(keyGroup.position) < 2.0){
-        hasKey=true; keyGroup.visible=false; audio.playPickup()
-        dialogueQueue=[{title:'ITEM — RUSTY KEY', text:'RUSTED OBSERVATORY KEY — STAMPED “NORTHLIGHT 1987”. OPENS THE FRONT DOOR.'}]
-        dialogueIndex=0; state='tape'; objectivePulse=1.2; renderUI(); return
-      }
-      // Fuse
-      if(!hasFuse && player.pos.distanceTo(fuseGroup.position) < 2.0){
-        hasFuse=true; fuseGroup.visible=false; audio.playPickup()
-        dialogueQueue=[{title:'ITEM — CERAMIC FUSE 30A', text:'BLOWN FUSE FOR THE GENERATOR. NEED THIS + FUEL TO RESTORE POWER.'}]
-        dialogueIndex=0; state='tape'; objectivePulse=1.2; renderUI(); return
-      }
-      // Fuel
-      if(!hasFuel && player.pos.distanceTo(fuelGroup.position) < 2.0){
-        hasFuel=true; fuelGroup.visible=false; audio.playPickup()
-        dialogueQueue=[{title:'ITEM — FUEL CAN', text:'HALF-FULL DIESEL CAN. HEAVY. FOR THE SHED GENERATOR.'}]
-        dialogueIndex=0; state='tape'; objectivePulse=1.2; renderUI(); return
-      }
-      // Batteries
-      for(let i=0;i<batteries.length;i++){
-        const bg = batteries[i]
-        if(!bg.visible) continue
-        if(player.pos.distanceTo(bg.position) < 1.9){
-          bg.visible=false; batteriesCollected++; flashlightBattery = Math.min(1, flashlightBattery + 0.42); audio.playPickup()
-          dialogueQueue=[{title:'ITEM — BATTERY', text:`FLASHLIGHT BATTERY +42% → ${Math.floor(flashlightBattery*100)}%.`}]
-          dialogueIndex=0; state='tape'; renderUI(); return
-        }
-      }
-      // Generator
-      if(player.pos.distanceTo(genGroup.position) < 2.4){
-        if(generatorRepaired){
-          dialogueQueue=[{title:'GENERATOR — ONLINE', text:'ENGINE HUMS AT 60Hz. POWER RESTORED TO OBSERVATORY. LIGHTS ARE ON.'}]
-          dialogueIndex=0; state='tape'; renderUI(); return
-        }
-        if(hasFuse && hasFuel){
-          generatorRepaired=true; hasFuse=false; hasFuel=false
-          const gl = genGroup.userData.light as THREE.Mesh; (gl.material as THREE.MeshBasicMaterial).color.setHex(0x2ecc71)
-          audio.playTone(180,0.6,'square',0.32); setTimeout(()=>audio.playTone(360,0.8,'square',0.28), 250)
-          dialogueQueue=[{title:'GENERATOR — REPAIRED', text:'FUSE SEATED. FUEL PRIMED. THE GENERATOR ROARS TO LIFE. OBSERVATORY POWER IS RESTORED — DOOR AND TRANSMITTER NOW HAVE POWER.'}]
-          dialogueIndex=0; state='tape'; objectivePulse=1.5; renderUI(); return
-        } else {
-          let need = []
-          if(!hasFuse) need.push('FUSE [TOWER]')
-          if(!hasFuel) need.push('FUEL [BUNKER]')
-          dialogueQueue=[{title:'GENERATOR — OFFLINE', text:`GENERATOR DEAD. NEED: ${need.join(' + ')}. FIND THEM AND RETURN.`}]
-          dialogueIndex=0; state='tape'; renderUI(); return
-        }
-      }
-      // Door
-      if(!doorUnlocked && player.pos.distanceTo(doorGroup.position) < 2.2){
-        if(hasKey){
-          doorUnlocked=true
-          doorGroup.visible=false
-          // remove collider for door (first collider)
-          audio.playTone(540,0.35,'square',0.28)
-          dialogueQueue=[{title:'DOOR — UNLOCKED', text:'KEY TURNS WITH A SCREECH. HEAVY DOOR CREAKS OPEN. TRANSMITTER IS INSIDE.'}]
-          dialogueIndex=0; state='tape'; objectivePulse=1.2; renderUI(); return
-        } else {
-          dialogueQueue=[{title:'DOOR — LOCKED', text:'OBSERVATORY DOOR PADLOCKED. NEED KEY FROM GARAGE.'}]
-          dialogueIndex=0; state='tape'; renderUI(); return
-        }
-      }
-      // Transmitter
-      const txPos = txGroup.position
-      if(player.pos.distanceTo(txPos) < 2.6){
-        if(!doorUnlocked){ dialogueQueue=[{title:'TRANSMITTER — BLOCKED', text:'TRANSMITTER INSIDE LOCKED OBSERVATORY. FIND KEY FIRST.'}]; dialogueIndex=0; state='tape'; renderUI(); return }
-        if(!generatorRepaired){ dialogueQueue=[{title:'TRANSMITTER — NO POWER', text:'NO POWER. REPAIR GENERATOR AT SHED FIRST (NEEDS FUSE + FUEL).'}]; dialogueIndex=0; state='tape'; renderUI(); return }
-        if(tapesCollected<4){ dialogueQueue=[{title:'TRANSMITTER — NEED TAPES', text:`NEED ${4-tapesCollected} MORE TAPE(S) TO RECALIBRATE. CHECK MAP MARKERS.`}]; dialogueIndex=0; state='tape'; renderUI(); return }
-        // Enter tuning mode
-        state='tuning'; tuning=true; renderUI(); return
-      }
-      // Nothing nearby
-      audio.playTone(100,0.08,'square',0.08)
+      doInteract()
     }
   } else if(state==='paused'){
     if(k==='escape'){ state='playing'; renderUI() }
@@ -629,6 +681,9 @@ function onResize(){
 }
 window.addEventListener('resize', onResize)
 
+// Wire touch to input
+input.setTouch(touch)
+
 // Game loop
 const clock = new THREE.Clock()
 let frameAcc=0
@@ -639,10 +694,39 @@ function animate(){
   const time = clock.elapsedTime
   frameAcc+=dt
 
-  // Update PSX jitter
-  const jitter = state==='playing' ? (proximity*0.6 + 0.4) : 1.0
+  // Reduced motion: disable jitter/flicker if prefers
+  const jitter = prefersReducedMotion ? 0.08 : (state==='playing' ? (proximity*0.45 + 0.32) : 0.55)
   updatePsxMaterials(psxMaterials, time, jitter)
   crtMat.uniforms.uTime.value = time
+  if(prefersReducedMotion){ crtMat.uniforms.uDistortion.value = 0.06; crtMat.uniforms.uScanline.value = 0.25; } else { crtMat.uniforms.uDistortion.value = 0.18; crtMat.uniforms.uScanline.value = 0.62; }
+
+  // Snowfall
+  const posAttr = snowGeo.getAttribute('position') as THREE.BufferAttribute
+  for(let i=0;i<900;i++){
+    let y = posAttr.getY(i)
+    y -= snowVel[i] * dt
+    if(y < 0){
+      y = 38 + Math.random()*8
+      posAttr.setX(i, (Math.random()-0.5)*120 + player.pos.x*0.08) // drift with player
+      posAttr.setZ(i, (Math.random()-0.5)*120 + player.pos.z*0.08)
+    }
+    posAttr.setY(i, y)
+    // slight wind
+    posAttr.setX(i, posAttr.getX(i) + Math.sin(time*0.4 + i)*0.02*dt*18)
+  }
+  posAttr.needsUpdate = true
+  // Interior visibility - show when door unlocked and near
+  if(interiorGroup){
+    const nearDoor = player.pos.distanceTo(doorGroup.position) < 8 && doorUnlocked
+    interiorGroup.visible = nearDoor
+    // hide transmitter outside when interior visible to avoid double
+    txGroup.visible = !(nearDoor && player.pos.distanceTo(txGroup.position)<4)
+  }
+  // Auto-save every 4s while playing
+  if(state==='playing'){
+    autoSaveTimer += dt
+    if(autoSaveTimer>4){ autoSaveTimer=0; saveGame() }
+  }
 
   // Bios auto timer
   if(state==='bios'){
@@ -689,9 +773,9 @@ function animate(){
     }
   })
 
-  // Tuning state: radio dial moves with A/D, entity still hunts slowly
+  // Tuning state: radio dial moves with A/D, entity still hunts slowly (+touch)
   if(state==='tuning'){
-    const turn = (input.isDown('keya')||input.isDown('arrowleft')?-1:0) + (input.isDown('keyd')||input.isDown('arrowright')?1:0)
+    const turn = (input.isDown('keya')||input.isDown('arrowleft')||touch.l?-1:0) + (input.isDown('keyd')||input.isDown('arrowright')||touch.r?1:0)
     if(turn!==0){
       radioFreq = THREE.MathUtils.clamp(radioFreq + turn * dt * 6.5, 100, 160)
       // tune sound
@@ -709,9 +793,30 @@ function animate(){
   }
 
   if(state==='playing'){
+    // Touch light/map edge triggers
+    const tLight = !!(touch as any).light
+    const tMap = !!(touch as any).map
+    const tInteract = !!(touch as any).interact
+    // simple edge detect via global
+    ;(window as any)._prevTouch = (window as any)._prevTouch || { light:0, map:0, interact:0 }
+    const prev = (window as any)._prevTouch
+    if(tLight && !prev.light){
+      if(flashlightBattery>0.02){ flashlightOn=!flashlightOn; audio.playTone(420,0.08,'square',0.18); renderUI() }
+    }
+    if(tMap && !prev.map){ showMap=!showMap; renderUI() }
+    if(tInteract && !prev.interact){
+      // simulate E press - will be handled by manual check below after movement
+      ;(window as any)._touchInteractEdge = true
+    }
+    prev.light = tLight?1:0; prev.map = tMap?1:0; prev.interact = tInteract?1:0
+    if((window as any)._touchInteractEdge && state==='playing'){
+      ;(window as any)._touchInteractEdge=false
+      doInteract()
+    }
+
     // Battery drain while flashlight on
     if(flashlightOn && flashlightBattery>0){
-      flashlightBattery = Math.max(0, flashlightBattery - dt * 0.032)
+      flashlightBattery = Math.max(0, flashlightBattery - dt * 0.028)
       if(flashlightBattery<=0){ flashlightOn=false; objectivePulse=1.0; renderUI() }
     }
     objectivePulse = Math.max(0, objectivePulse - dt)
@@ -736,9 +841,11 @@ function animate(){
       const gl = genGroup.userData.light as THREE.Mesh
       if(gl) (gl.material as THREE.MeshBasicMaterial).color.setHex(Math.floor(time*6)%2===0?0x2ecc71:0x27ae60)
     }
+    // Touch run
+    const isTouchRun = !!(touch as any).run
     // Player movement - tank controls
     const axis = input.getAxis() // x = turn, y = forward
-    const isRun = input.isDown('shiftleft') || input.isDown('shiftright') || input.isDown('gamepad')
+    const isRun = input.isDown('shiftleft') || input.isDown('shiftright') || input.isDown('gamepad') || isTouchRun
     let turn = axis.x
     // Also Q/E for strafe? No, keep tank
     // Keyboard A/D already mapped to x, so that works as turn
@@ -808,9 +915,10 @@ function animate(){
       entityPatrolTarget.set((Math.random()-0.5)*30+8,0,(Math.random()-0.5)*30)
     }
 
-    let eSpeed = entityState==='chase' ? 3.45 : entityState==='stun' ? 0 : 1.45
+    const diffMult = difficulty==='easy'?0.78 : difficulty==='hard'?1.32 : 1
+    let eSpeed = (entityState==='chase' ? 3.35 : entityState==='stun' ? 0 : 1.35) * diffMult
     // Near transmitter when won, entity slows
-    if(wonTimer>0) eSpeed*=0.35
+    if(wonTimer>0) eSpeed*=0.38
 
     if(entityState!=='stun'){
       // Move toward target

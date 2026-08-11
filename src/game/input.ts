@@ -30,12 +30,22 @@ export class Input {
   isDown(code: string) { return this.keys.has(code.toLowerCase()) }
   any(...codes: string[]) { return codes.some(c => this.isDown(c)) }
 
+  touch: any = null
+  setTouch(t:any){ this.touch=t }
+
   getAxis() {
     let x = 0, y = 0
     if (this.isDown('arrowleft') || this.isDown('keya')) x -= 1
     if (this.isDown('arrowright') || this.isDown('keyd')) x += 1
     if (this.isDown('arrowup') || this.isDown('keyw')) y += 1
     if (this.isDown('arrowdown') || this.isDown('keys')) y -= 1
+    // touch
+    if(this.touch){
+      if(this.touch.l) x -= 1
+      if(this.touch.r) x += 1
+      if(this.touch.f) y += 1
+      if(this.touch.b) y -= 1
+    }
 
     // gamepad
     if (this.gamepadIndex !== null) {

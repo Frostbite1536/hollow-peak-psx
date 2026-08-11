@@ -382,8 +382,55 @@ html, body {
   z-index: 13;
 }
 
+/* Touch controls */
+#touch-controls {
+  position: absolute;
+  inset: 0;
+  z-index: 25;
+  pointer-events: none;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  padding: 12px 14px 16px;
+}
+.touch-stick, .touch-actions {
+  pointer-events: auto;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.touch-stick { flex-direction: column; }
+.touch-actions { flex-wrap: wrap; justify-content: flex-end; max-width: 140px; }
+.touch-btn {
+  width: 44px; height: 44px;
+  background: rgba(12,12,16,0.72);
+  border: 1px solid #333;
+  border-top: 1px solid #444;
+  color: #aaa;
+  font-size: 14px;
+  display: grid;
+  place-items: center;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+  transition: background 0.08s, border-color 0.08s;
+}
+.touch-btn:active {
+  background: rgba(28,20,20,0.92);
+  border-color: #c44;
+  color: #fff;
+}
+.touch-run { width: 62px; font-size: 10px; letter-spacing: 0.1em; }
+.touch-act { width: 62px; background: rgba(24,16,16,0.82); border-color: #5a2a2a; color: #e88; }
+@media (prefers-reduced-motion: reduce) {
+  .crt-flicker, .noise { display: none; }
+  .touch-btn { transition: none; }
+}
+
 /* Responsive */
 @media (max-width: 600px) {
   .hud { padding: 10px 12px; }
   .bios-logo { font-size: 32px; }
+  #touch-controls { padding: 8px 8px 10px; }
+  .touch-btn { width: 40px; height: 40px; font-size: 13px; }
 }

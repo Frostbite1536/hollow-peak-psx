@@ -473,6 +473,66 @@ export function createWorld(scene: THREE.Scene, psxMaterials: THREE.Material[]) 
   const sky = new THREE.Mesh(skyGeo, skyMat)
   scene.add(sky)
 
+  // Interior for observatory (visible through door when unlocked - low-poly, PS1 style)
+  const interiorGroup = new THREE.Group()
+  interiorGroup.position.set(22,0, -0.8)
+  // floor darker
+  const intFloorGeo = new THREE.PlaneGeometry(12,8)
+  const intFloorMat = new THREE.MeshLambertMaterial({ color: 0x3a3a42 })
+  psxifyMaterial(intFloorMat); psxMaterials.push(intFloorMat)
+  const intFloor = new THREE.Mesh(intFloorGeo, intFloorMat)
+  intFloor.rotation.x = -Math.PI/2
+  intFloor.position.y = 0.02
+  interiorGroup.add(intFloor)
+  // back wall with monitor
+  const backWallGeo = new THREE.BoxGeometry(12,3.2,0.2)
+  const backWallMat = new THREE.MeshLambertMaterial({ color: 0x4a4a5a })
+  psxifyMaterial(backWallMat); psxMaterials.push(backWallMat)
+  const backWall = new THREE.Mesh(backWallGeo, backWallMat)
+  backWall.position.set(0,1.6,-3.9)
+  interiorGroup.add(backWall)
+  // desks
+  for(let dx of [-3.2, 3.2]){
+    const deskGeo = new THREE.BoxGeometry(3.2,0.9,1.6)
+    const deskMat = new THREE.MeshLambertMaterial({ color: 0x5a4a3a })
+    psxifyMaterial(deskMat); psxMaterials.push(deskMat)
+    const desk = new THREE.Mesh(deskGeo, deskMat)
+    desk.position.set(dx,0.45, -1.2)
+    interiorGroup.add(desk)
+    // monitor
+    const monGeo = new THREE.BoxGeometry(0.9,0.7,0.12)
+    const monMat = new THREE.MeshLambertMaterial({ color: 0x111111 })
+    psxifyMaterial(monMat); psxMaterials.push(monMat)
+    const mon = new THREE.Mesh(monGeo, monMat)
+    mon.position.set(dx,1.12,-1.2)
+    interiorGroup.add(mon)
+    const screenGeo = new THREE.PlaneGeometry(0.72,0.5)
+    const screenMat = new THREE.MeshBasicMaterial({ color: 0x2ecc71, transparent:true, opacity:0.55 })
+    const screen = new THREE.Mesh(screenGeo, screenMat)
+    screen.position.set(dx,1.12, -1.13)
+    interiorGroup.add(screen)
+  }
+  // transmitter inside is txGroup, move it slightly inside for interior view
+  interiorGroup.visible = false // toggled when door unlocked and near
+  scene.add(interiorGroup)
+
+  // Snowfall particles - PS1 style, chunky white dots, no motion blur
+  const snowCount = 900
+  const snowGeo = new THREE.BufferGeometry()
+  const snowPos = new Float32Array(snowCount*3)
+  const snowVel = new Float32Array(snowCount)
+  for(let i=0;i<snowCount;i++){
+    snowPos[i*3]= (Math.random()-0.5)*120
+    snowPos[i*3+1]= Math.random()*45 + 5
+    snowPos[i*3+2]= (Math.random()-0.5)*120
+    snowVel[i]= 0.6 + Math.random()*1.1
+  }
+  snowGeo.setAttribute('position', new THREE.BufferAttribute(snowPos,3))
+  const snowMat = new THREE.PointsMaterial({ color: 0xffffff, size: 0.18, sizeAttenuation: true, transparent:true, opacity:0.62, depthWrite:false })
+  // PS1 points are square, not round - use nearest
+  const snowfall = new THREE.Points(snowGeo, snowMat)
+  scene.add(snowfall)
+
   // Moon
   const moonGeo = new THREE.SphereGeometry(3.2,8,8)
   const moonMat = new THREE.MeshBasicMaterial({ color: 0xe8e8d0, transparent:true, opacity:0.85 })
@@ -504,5 +564,5 @@ export function createWorld(scene: THREE.Scene, psxMaterials: THREE.Material[]) 
   // cliff walls at far edges via extra colliders
   // forest walls considered soft colliders - we handle via distance
 
-  return { tapes, colliders, moon, dishGroup, towerLight: light, txGroup, doorGroup, genGroup, keyGroup, fuseGroup, fuelGroup, batteries, psxMaterials }
+  return { tapes, colliders, moon, dishGroup, towerLight: light, txGroup, doorGroup, genGroup, keyGroup, fuseGroup, fuelGroup, batteries, interiorGroup, snowfall, snowGeo, snowPos, snowVel, psxMaterials }
 }
