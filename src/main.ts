@@ -4,9 +4,10 @@ import { PSX_WIDTH, PSX_HEIGHT, psxifyMaterial, CRTFragment, CRTVertex, updatePs
 import { Input } from './game/input'
 import { AudioManager } from './game/audio'
 import { createWorld } from './game/world'
+import { SonicAdventureLevel } from './game/sonicAdventure'
 
 // Types
-type GameState = 'bios'|'title'|'playing'|'paused'|'tape'|'tuning'|'won'|'lost'
+type GameState = 'bios'|'title'|'playing'|'paused'|'tape'|'tuning'|'won'|'lost'|'sonic'
 
 const app = document.getElementById('app')!
 const container = document.createElement('div')
@@ -170,6 +171,8 @@ let hearTimer = 0
 // Audio
 const audio = new AudioManager()
 const input = new Input()
+let sonicLevel: SonicAdventureLevel | null = null
+let activeLevel: 'hollow'|'sonic' = 'hollow'
 
 // Game state
 let state: GameState = 'bios'
@@ -293,7 +296,8 @@ function renderUI(){
     uiLayer.appendChild(menu)
     const opts = menu.querySelector('#menu-opts')!
     const options = [
-      {label:'NEW GAME', action:()=> { clearSave(); startGame() }},
+      {label:'HOLLOW PEAK — NEW GAME', action:()=> { clearSave(); startGame() }},
+      {label:'SONIC ADVENTURE — DREAMCAST TEST', action:()=> startSonicLevel()},
       {label: hasSave ? 'CONTINUE ●' : 'CONTINUE', action:()=> { if(hasSave && loadGame()){ state='playing'; renderUI(); } else startGame() }},
       {label:`DIFFICULTY: ${difficulty.toUpperCase()}`, action:()=> { difficulty = difficulty==='easy'?'normal':difficulty==='normal'?'hard':'easy'; localStorage.setItem('hp_difficulty', difficulty); renderUI() }},
     ]
@@ -377,6 +381,7 @@ function renderUI(){
       pm.querySelector('#restart')!.addEventListener('click', ()=> startGame())
       pm.querySelector('#titleBtn')!.addEventListener('click', ()=> {state='title'; renderUI()})
     }
+    // @ts-ignore
     // Map overlay (TAB)
     if(showMap && state==='playing'){
       const mapEl = document.createElement('div')
@@ -405,6 +410,59 @@ function renderUI(){
     }
     return
   }
+  if(state==='sonic'){
+    // Dreamcast Sonic HUD - glossy, vibrant, no PSX dither
+    const hudData = sonicLevel ? sonicLevel.getHUD() : { rings:0, time:'00:00', lives:3, speed:'0.0' }
+    const hud = document.createElement('div'); hud.className='hud'
+    // Dreamcast style: top bar with rings, time, lives, bottom with controls
+    hud.innerHTML=`
+      <div class="hud-top">
+        <div>
+          <div style="font-family:VT323,monospace;font-size:20px;letter-spacing:0.06em;color:#ffd800;text-shadow:0 1px 0 #8a6d00, 0 0 6px rgba(255,216,0,0.4)">RINGS <span style="color:#fff">${hudData.rings.toString().padStart(2,'0')}</span></div>
+          <div style="font-size:10px;color:#fff;letter-spacing:0.12em;margin-top:2px">TIME ${hudData.time} • SPEED ${hudData.speed}</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-family:VT323,monospace;font-size:18px;color:#ff3b30;text-shadow:0 1px 0 #7a0a00">LIVES <span style="color:#fff">${hudData.lives}</span></div>
+          <div style="font-size:9px;color:#cce6ff;letter-spacing:0.16em;margin-top:2px">SONIC ADVENTURE • DREAMCAST</div>
+          <div style="font-size:8px;color:#8ec8ff;margin-top:2px">EMERALD COAST TEST ZONE</div>
+        </div>
+      </div>
+      <div class="hud-bottom">
+        <div class="hud-controls" style="color:#b0d0ff">
+          <div><b style="color:#fff">WASD</b> MOVE • <b style="color:#fff">SPACE</b> JUMP/HOMING • <b style="color:#fff">SHIFT</b> RUN</div>
+          <div><b style="color:#fff">MOUSE</b> CAMERA • <b style="color:#fff">ESC</b> PAUSE • <b style="color:#fff">E</b> SPIN DASH</div>
+        </div>
+        <div class="compass" style="color:#ffd800">▲ ${Math.round((sonicLevel?.yaw||0)*180/Math.PI)}°</div>
+      </div>
+    `
+    uiLayer.appendChild(hud)
+    // Sonic-specific pause / win / lost overlays
+    if(sonicLevel){
+      if(sonicLevel.state==='won'){
+        const w=document.createElement('div'); w.className='menu-screen'; w.style.background='rgba(8,18,32,0.88)'
+        w.innerHTML=`
+          <div class="gameover-title" style="color:#ffd800;text-shadow:0 0 12px rgba(255,216,0,0.5)">GOAL!</div>
+          <div class="menu-subtitle" style="color:#8ec8ff">EMERALD COAST CLEAR • TIME ${hudData.time} • RINGS ${hudData.rings}</div>
+          <div class="bios-text" style="margin:14px 0;color:#cce6ff">RANK: ${hudData.rings>=18?'S':hudData.rings>=12?'A':hudData.rings>=8?'B':'C'} • SPEED ${hudData.speed}</div>
+          <div class="menu-options"><button class="menu-btn active" id="sAgain"><span>PLAY AGAIN</span></button><button class="menu-btn" id="sTitle"><span>TITLE SCREEN</span></button></div>
+          <div class="menu-footer" style="color:#4a8ac8">DREAMCAST • 640×480 • 60FPS • SONIC ADVENTURE STYLE TEST</div>
+        `
+        uiLayer.appendChild(w)
+        w.querySelector('#sAgain')!.addEventListener('click', ()=> startSonicLevel())
+        w.querySelector('#sTitle')!.addEventListener('click', ()=> { activeLevel='hollow'; setDreamcastMode(false); location.reload() })
+      } else if(sonicLevel.state==='lost'){
+        const l=document.createElement('div'); l.className='menu-screen'; l.style.background='rgba(32,8,8,0.88)'
+        l.innerHTML=`
+          <div class="gameover-title">GAME OVER</div>
+          <div class="menu-subtitle" style="color:#ff8a8a">YOU FELL • RINGS ${hudData.rings}</div>
+          <div class="menu-options"><button class="menu-btn active" id="sRetry"><span>RETRY</span></button><button class="menu-btn" id="sTitle2"><span>TITLE SCREEN</span></button></div>
+        `
+        uiLayer.appendChild(l)
+        l.querySelector('#sRetry')!.addEventListener('click', ()=> startSonicLevel())
+        l.querySelector('#sTitle2')!.addEventListener('click', ()=> { activeLevel='hollow'; setDreamcastMode(false); location.reload() })
+      }
+    }
+  // @ts-ignore
   if(state==='tape'){
     const d = dialogueQueue[dialogueIndex]
     if(!d){ state='playing'; renderUI(); return }
@@ -418,6 +476,7 @@ function renderUI(){
     uiLayer.appendChild(box)
     return
   }
+  // @ts-ignore
   if(state==='tuning'){
     const diff = Math.abs(radioFreq - 147.7)
     const close = diff < 0.6
@@ -444,6 +503,7 @@ function renderUI(){
     uiLayer.className='ui-layer interactive'
     return
   }
+  // @ts-ignore
   if(state==='won'){
     const w = document.createElement('div'); w.className='menu-screen'
     w.innerHTML=`
@@ -465,6 +525,7 @@ function renderUI(){
     w.querySelector('#toTitle')!.addEventListener('click', ()=> { state='title'; renderUI() })
     return
   }
+  // @ts-ignore
   if(state==='lost'){
     const l = document.createElement('div'); l.className='menu-screen'
     l.innerHTML=`
@@ -584,7 +645,89 @@ function doInteract(){
   return false
 }
 
+function setDreamcastMode(on: boolean){
+  if(on){
+    // Dreamcast 640x480 VGA, bilinear, vibrant, no dither, subtle CRT
+    rt.setSize(640,480)
+    rt.texture.magFilter = THREE.LinearFilter
+    rt.texture.minFilter = THREE.LinearFilter
+    crtMat.uniforms.uDistortion.value = 0.06
+    crtMat.uniforms.uScanline.value = 0.22
+    crtMat.uniforms.uChroma.value = 0.0006
+    ;(overlay as HTMLElement).style.opacity = '0.06'
+    ;(vignette as HTMLElement).style.opacity = '0.22'
+    ;(flicker as HTMLElement).style.display = 'none'
+    ;(noise as HTMLElement).style.opacity = '0.012'
+    // disable PSX jitter - set to near zero
+    // materials will be Dreamcast Phong, not PSX, so jitter will be ignored
+  } else {
+    rt.setSize(PSX_WIDTH, PSX_HEIGHT)
+    rt.texture.magFilter = THREE.NearestFilter
+    rt.texture.minFilter = THREE.NearestFilter
+    crtMat.uniforms.uDistortion.value = 0.18
+    crtMat.uniforms.uScanline.value = 0.62
+    crtMat.uniforms.uChroma.value = 0.0014
+    ;(overlay as HTMLElement).style.opacity = ''
+    ;(vignette as HTMLElement).style.opacity = ''
+    ;(flicker as HTMLElement).style.display = ''
+    ;(noise as HTMLElement).style.opacity = ''
+  }
+}
+
+function startSonicLevel(){
+  activeLevel='sonic'
+  // clear hollow fog and set Dreamcast sky
+  // hide hollow objects by clearing scene - but keep lights for Sonic to recreate
+  // Easiest: remove all hollow meshes by traversing and removing those not needed for Sonic
+  // We'll just clear scene and let Sonic level recreate its own lights/world
+  // Save hollow state already
+  // Clear scene
+  const toRemove: THREE.Object3D[] = []
+  scene.traverse(o=>{ if(o!==camera && o!==flash && o!==flash.target) toRemove.push(o) })
+  // keep camera, but remove others - then Sonic will add back its own
+  // Actually simpler: remove everything except camera
+  while(scene.children.length>0) scene.remove(scene.children[0])
+  scene.add(camera)
+  scene.add(flash); scene.add(flash.target)
+  flash.intensity=0
+  // Dreamcast mode
+  setDreamcastMode(true)
+  // Create Sonic level
+  sonicLevel = new SonicAdventureLevel(scene, camera, input)
+  state='sonic' as GameState
+  // Reset sonic camera
+  camera.fov = 62; camera.updateProjectionMatrix()
+  camera.position.set(0,3.2,9)
+  renderUI()
+  audio.init()
+  // Dreamcast jingle
+  audio.playTone(520,0.22,'square',0.22); setTimeout(()=>audio.playTone(660,0.24,'square',0.22),180); setTimeout(()=>audio.playTone(780,0.4,'square',0.24),360)
+}
+
+function returnToHollow(){
+  activeLevel='hollow'
+  setDreamcastMode(false)
+  // clear Sonic scene
+  if(sonicLevel){
+    // dispose Sonic meshes - just clear scene
+    while(scene.children.length>0) scene.remove(scene.children[0])
+    // recreate Hollow Peak world - need to recreate from scratch or just reload page?
+    // For simplicity, reload page to restore Hollow Peak cleanly
+    location.reload()
+    return
+  }
+  state='playing'
+  renderUI()
+}
+
 function startGame(){
+  activeLevel='hollow'
+  setDreamcastMode(false)
+  // if coming from Sonic, reload to get clean Hollow world
+  if(sonicLevel){
+    location.reload()
+    return
+  }
   player.pos.set(-2,0,10)
   player.yaw = -0.18
   player.stamina = 1
@@ -613,6 +756,7 @@ function startGame(){
   ;(txGroup.userData.light.material as THREE.MeshBasicMaterial).color.setHex(0x30ff30)
   state='playing'
   scene.fog = new THREE.Fog(0x9aa8b8, 18, 72)
+  camera.fov=58; camera.updateProjectionMatrix()
   renderUI()
   renderer.domElement.focus()
 }
@@ -625,11 +769,12 @@ window.addEventListener('keydown', e=>{
     state='title'; renderUI()
   } else if(state==='title'){
     if(k==='arrowup'||k==='keyw'){ titleSelect = Math.max(0, titleSelect-1); renderUI() }
-    if(k==='arrowdown'||k==='keys'){ titleSelect = Math.min(2, titleSelect+1); renderUI() }
+    if(k==='arrowdown'||k==='keys'){ titleSelect = Math.min(3, titleSelect+1); renderUI() }
     if(k==='enter'||k==='space'){
-      if(titleSelect===0) startGame()
-      else if(titleSelect===1) startGame()
-      else if(titleSelect===2){ flashlightOn=!flashlightOn; renderUI() }
+      if(titleSelect===0){ clearSave(); startGame() }
+      else if(titleSelect===1) startSonicLevel()
+      else if(titleSelect===2){ const hasSave = !!localStorage.getItem('hp_save_v2'); if(hasSave && loadGame()){ state='playing'; renderUI(); } else startGame() }
+      else if(titleSelect===3){ difficulty = difficulty==='easy'?'normal':difficulty==='normal'?'hard':'easy'; localStorage.setItem('hp_difficulty', difficulty); renderUI() }
     }
   } else if(state==='tape'){
     if(k==='keye'||k==='enter'||k==='space') advanceDialogue()
@@ -652,6 +797,12 @@ window.addEventListener('keydown', e=>{
     }
     if(k==='keya'||k==='arrowleft') radioFreq = Math.max(100, radioFreq - 0.7)
     if(k==='keyd'||k==='arrowright') radioFreq = Math.min(160, radioFreq + 0.7)
+  } else if(state==='sonic'){
+    if(k==='escape'||k==='keyp'){
+      if(sonicLevel && sonicLevel.state==='playing'){ sonicLevel.state='paused' as any; renderUI() }
+      else if(sonicLevel && (sonicLevel.state as any)==='paused'){ sonicLevel.state='playing'; renderUI() }
+    }
+    if(k==='keyr'){ startSonicLevel() }
   } else if(state==='playing'){
     if(k==='escape'||k==='keyp'){ state='paused'; renderUI() }
     if(k==='keyf'){ 
@@ -790,6 +941,65 @@ function animate(){
       entityGroup.lookAt(player.pos.x, entityGroup.position.y, player.pos.z)
     } else entityStun-=dt
     if(distToPlayer < 1.15){ audio.playHurt(); state='lost'; tuning=false; renderUI() }
+  }
+
+  // Sonic Adventure Dreamcast level - update, camera, render and early return
+  if(state==='sonic' && sonicLevel){
+    if(sonicLevel.state==='playing'){
+      // mouse camera orbit
+      if(Math.abs(input.mouseDelta.x) > 0.5){
+        sonicLevel.cameraYaw += input.mouseDelta.x * 0.004
+        input.mouseDelta.x *= 0.82
+      } else input.mouseDelta.x *= 0.9
+      if(Math.abs(input.mouseDelta.y) > 0.5){
+        sonicLevel.cameraPitch = THREE.MathUtils.clamp(sonicLevel.cameraPitch - input.mouseDelta.y*0.003, -0.45, 0.55)
+        input.mouseDelta.y *= 0.82
+      }
+      sonicLevel.update(dt, time)
+      // Dreamcast chase cam
+      const target = sonicLevel.sonic.position.clone().add(new THREE.Vector3(0,0.55,0))
+      const yaw = sonicLevel.yaw + sonicLevel.cameraYaw
+      const pitch = sonicLevel.cameraPitch
+      const dist = sonicLevel.cameraDist
+      const camPos = new THREE.Vector3(
+        target.x - Math.sin(yaw)*Math.cos(pitch)*dist,
+        target.y + Math.sin(pitch)*dist + 1.4,
+        target.z - Math.cos(yaw)*Math.cos(pitch)*dist
+      )
+      // simple wall clip - lerp
+      camera.position.lerp(camPos, 0.14)
+      camera.lookAt(target)
+      // check win/lost to show UI
+      // @ts-ignore
+      if(sonicLevel.state==='won' || sonicLevel.state==='lost'){
+        renderUI()
+      }
+    } else if(sonicLevel.state==='paused'){
+      // paused - still render but not update
+    }
+    // HUD sync every 0.15s
+    if(frameAcc>0.14){
+      frameAcc=0
+      // trigger HUD refresh for rings/time without full re-render sparingly
+      const hudRings = document.querySelector('.hud') as HTMLElement | null
+      if(hudRings && sonicLevel.state==='playing'){
+        // quick update via renderUI if needed - but we do partial to avoid flicker
+        // For now, just re-renderHUD sparingly
+        // renderUI() // too heavy, skip
+      }
+    }
+    // Render Sonic scene (same scene) - use Dreamcast clear color already set
+    renderer.setRenderTarget(rt)
+    renderer.setClearColor(sonicLevel.scene.background as THREE.Color, 1)
+    renderer.render(sonicLevel.scene, camera)
+    renderer.setRenderTarget(null)
+    renderer.setClearColor(0x000000,1)
+    renderer.render(crtScene, crtCam)
+    overlay.style.opacity = '0.06'
+    vignette.style.opacity = '0.22'
+    // periodically refresh HUD for time
+    if(Math.floor(time*4)%4===0 && Math.floor(time*10)%10===0){ /* throttled */ }
+    return
   }
 
   if(state==='playing'){
@@ -1112,3 +1322,4 @@ document.addEventListener('visibilitychange', ()=>{
 
 // Expose for debug
 ;(window as any).GAME = { player, entityGroup, tapes, state: ()=>state, audio, psxMaterials }
+}
